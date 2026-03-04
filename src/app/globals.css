@@ -1,0 +1,591 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f8f7f4;
+  --surface: #ffffff;
+  --text: #1c1b19;
+  --text-muted: #7a7875;
+  --ghost: #b5b2ad;
+  --accent: #2563eb;
+  --accent-light: #eff6ff;
+  --sunnyd-accent: #22c55e;
+  --border: #e8e6e3;
+  --danger: #dc2626;
+  --sidebar-bg: #fafaf9;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ProseMirror / Tiptap editor styles */
+.ProseMirror {
+  outline: none;
+  min-height: calc(100vh - 84px);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
+  overflow-x: hidden;
+}
+
+.ProseMirror p {
+  font-family: var(--font-lora), Georgia, serif;
+  font-size: 17px;
+  line-height: 1.75;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.ProseMirror h1,
+.ProseMirror h2,
+.ProseMirror blockquote,
+.ProseMirror li {
+  overflow-wrap: anywhere;
+}
+
+.ProseMirror h1 {
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  font-size: 28px;
+  font-weight: 600;
+  margin-bottom: 0.5em;
+}
+
+.ProseMirror h2 {
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  font-size: 22px;
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.4em;
+}
+
+.ProseMirror blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 1em;
+  margin-left: 0;
+  color: var(--text-muted);
+}
+
+.ProseMirror ul,
+.ProseMirror ol {
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+
+.ProseMirror li {
+  margin: 0.25em 0;
+}
+
+.ProseMirror [data-type="taskItem"] {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+}
+
+.ProseMirror [data-type="taskItem"] input[type="checkbox"] {
+  margin-top: 0.35em;
+}
+
+/* Ghost text styling */
+.ProseMirror .ghost-text {
+  color: var(--ghost);
+  font-style: italic;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Status bar pulse animation (thinking/analyzing states) */
+@keyframes ai-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.animate-ai-pulse {
+  animation: ai-pulse 1.2s ease-in-out infinite;
+}
+
+/* Question detection - light green highlight when detected, clickable for Answer/Dismiss */
+.ProseMirror .question-highlight {
+  background: rgba(134, 239, 172, 0.4);
+  border-radius: 4px;
+  padding: 0 2px;
+  transition: background 200ms ease;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(134, 239, 172, 0.2);
+}
+
+.ProseMirror .question-highlight:hover {
+  background: rgba(134, 239, 172, 0.55);
+}
+
+@keyframes sunnyd-thinking {
+  0%,
+  100% {
+    background: rgba(45, 106, 79, 0.08);
+    box-shadow: 0 0 0 0 rgba(45, 106, 79, 0.2);
+  }
+  50% {
+    background: rgba(45, 106, 79, 0.14);
+    box-shadow: 0 0 0 3px rgba(45, 106, 79, 0.12);
+  }
+}
+
+.ProseMirror .question-highlight.sunnyd-thinking {
+  animation: sunnyd-thinking 1.2s ease-in-out infinite;
+}
+
+/* Action item detection - subtle underline */
+.ProseMirror .action-item-highlight {
+  border-bottom: 1px solid var(--accent);
+  border-bottom-style: dotted;
+  cursor: pointer;
+}
+
+/* SunnyD scan/settle — flowing highlight as agent reads */
+@keyframes sunnyd-scan-flow {
+  0%,
+  100% {
+    background-color: rgba(45, 106, 79, 0.14);
+    box-shadow: 0 0 0 0 rgba(45, 106, 79, 0.08);
+  }
+  50% {
+    background-color: rgba(45, 106, 79, 0.22);
+    box-shadow: 0 0 0 2px rgba(45, 106, 79, 0.06);
+  }
+}
+
+.ProseMirror .sunnyd-scan-highlight {
+  animation: sunnyd-scan-flow 0.8s ease-in-out infinite;
+  border-radius: 2px;
+  transition: background-color 120ms ease;
+}
+
+/* SunnyD acting/thinking — blinking highlight when processing */
+@keyframes sunnyd-acting-blink {
+  0%,
+  100% {
+    background-color: rgba(45, 106, 79, 0.12);
+    box-shadow: 0 0 0 0 rgba(45, 106, 79, 0.15);
+  }
+  50% {
+    background-color: rgba(45, 106, 79, 0.2);
+    box-shadow: 0 0 0 3px rgba(45, 106, 79, 0.1);
+  }
+}
+
+.ProseMirror .sunnyd-acting-highlight {
+  animation: sunnyd-acting-blink 1.2s ease-in-out infinite;
+  border-radius: 2px;
+}
+
+/* Legacy class names kept for compatibility */
+.ProseMirror .sunnyd-word-active {
+  background-color: rgba(45, 106, 79, 0.13);
+  border-radius: 2px;
+}
+
+.ProseMirror .sunnyd-settled {
+  background-color: rgba(45, 106, 79, 0.13);
+  border-radius: 2px;
+}
+
+
+/* SunnyD "I acted here" flash */
+@keyframes sunnyd-act {
+  0%   { background-color: transparent; }
+  20%  { background-color: rgba(45, 106, 79, 0.18); }
+  100% { background-color: transparent; }
+}
+
+.ProseMirror .sunnyd-acted {
+  animation: sunnyd-act 800ms ease-out forwards;
+  border-radius: 3px;
+}
+
+/* SunnyD contradiction flag highlight */
+.ProseMirror .sunnyd-flag {
+  background: rgba(234, 179, 8, 0.2);
+  border-radius: 2px;
+}
+
+/* SunnyD apply flash - 200ms fade from green tint to transparent */
+@keyframes sunnyd-flash {
+  0% {
+    background: rgba(34, 197, 94, 0.25);
+    border-radius: 2px;
+  }
+  100% {
+    background: transparent;
+    border-radius: 0;
+  }
+}
+
+.ProseMirror .sunnyd-flash {
+  animation: sunnyd-flash 200ms ease-out forwards;
+}
+
+/* Selection toolbar — dark pill */
+.sunnyd-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #1a1a18;
+  border-radius: 10px;
+  padding: 5px 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18), 0 1px 4px rgba(0, 0, 0, 0.12);
+  pointer-events: all;
+}
+
+.sunnyd-toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: "DM Sans", sans-serif;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.75);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+  white-space: nowrap;
+}
+
+.sunnyd-toolbar-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.sunnyd-toolbar-btn.loading {
+  color: rgba(45, 106, 79, 0.9);
+  pointer-events: none;
+}
+
+.sunnyd-toolbar-divider {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.12);
+  margin: 0 4px;
+}
+
+/* Result panel */
+.sunnyd-result-panel {
+  width: 480px;
+  max-width: 90vw;
+  background: #ffffff;
+  border: 1px solid rgba(45, 106, 79, 0.2);
+  border-top: 2px solid rgba(45, 106, 79, 0.5);
+  border-radius: 0 0 10px 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  padding: 16px;
+  z-index: 100;
+  font-family: var(--font-lora), Lora, Georgia, serif;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+.sunnyd-result-label {
+  font-family: "DM Sans", sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: rgba(45, 106, 79, 0.7);
+  margin-bottom: 10px;
+}
+
+.sunnyd-result-content {
+  min-height: 1.5em;
+}
+
+.sunnyd-result-content p {
+  margin: 0 0 0.5em 0;
+}
+
+.sunnyd-result-content p:last-child {
+  margin-bottom: 0;
+}
+
+.sunnyd-result-content .sunnyd-diff {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  text-decoration-color: rgba(45, 106, 79, 0.4);
+}
+
+.sunnyd-result-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.sunnyd-result-apply {
+  flex: 1;
+  padding: 7px 14px;
+  background: #1a1a18;
+  color: #fff;
+  border-radius: 7px;
+  font-size: 12px;
+  font-family: "DM Sans", sans-serif;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: opacity 150ms;
+}
+
+.sunnyd-result-apply:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.sunnyd-result-apply:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.sunnyd-result-discard {
+  padding: 7px 14px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 12px;
+  font-family: "DM Sans", sans-serif;
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+}
+
+.sunnyd-result-discard:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.sunnyd-result-copy {
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+}
+
+.sunnyd-result-copy:hover:not(:disabled) {
+  background: var(--border);
+  color: var(--text);
+}
+
+.sunnyd-result-copy:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Selection tint while panel open */
+.ProseMirror .sunnyd-selection-tint {
+  background: rgba(59, 130, 246, 0.08);
+  border-radius: 2px;
+}
+
+/* SunnyD Card — consistent container for all SunnyD insertions */
+.ProseMirror .sunnyd-card {
+  position: relative;
+  margin: 4px 0 8px 0;
+  padding: 10px 14px 10px 16px;
+  background: rgba(45, 106, 79, 0.04);
+  border-left: 2px solid rgba(45, 106, 79, 0.3);
+  border-radius: 0 6px 6px 0;
+  font-size: 0.95em;
+  color: var(--text);
+  line-height: 1.65;
+  transition: background 200ms, border-color 200ms;
+}
+
+.ProseMirror .sunnyd-card::before {
+  content: "✦";
+  position: absolute;
+  left: -18px;
+  top: 11px;
+  font-size: 9px;
+  color: rgba(45, 106, 79, 0.5);
+  line-height: 1;
+}
+
+.ProseMirror .sunnyd-card-dismiss {
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color 100ms;
+}
+
+.ProseMirror .sunnyd-card-dismiss:hover {
+  color: var(--text);
+}
+
+.ProseMirror .sunnyd-card-buttons {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 150ms;
+}
+
+.ProseMirror .sunnyd-card:hover .sunnyd-card-buttons {
+  opacity: 1;
+}
+
+.ProseMirror .sunnyd-card.promoted {
+  background: transparent;
+  border-left: none;
+  padding-left: 0;
+  font-size: 1em;
+}
+
+.ProseMirror .sunnyd-card.promoted::before {
+  display: none;
+}
+
+/* Question-answer block: answer + chat with SunnyD */
+.ProseMirror .question-answer-block {
+  font-family: var(--font-lora), Georgia, serif;
+}
+
+.ProseMirror .question-answer-block .question-answer-body {
+  font-size: 0.95em;
+  line-height: 1.65;
+}
+
+.ProseMirror .question-answer-block .question-answer-body p {
+  margin: 0.4em 0;
+}
+
+.ProseMirror .question-answer-block .question-answer-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.ProseMirror .question-answer-block .question-answer-messages::-webkit-scrollbar-thumb {
+  background: rgba(45, 106, 79, 0.2);
+  border-radius: 3px;
+}
+
+.ProseMirror .sunnyd-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(45, 106, 79, 0.7);
+  margin-right: 6px;
+}
+
+/* SunnyD crafting/insertion — animated green highlight */
+@keyframes sunnyd-craft {
+  0% {
+    background-color: rgba(45, 106, 79, 0);
+    box-shadow: 0 0 0 0 rgba(45, 106, 79, 0.2);
+  }
+  30% {
+    background-color: rgba(45, 106, 79, 0.12);
+    box-shadow: 0 0 0 4px rgba(45, 106, 79, 0.15);
+  }
+  100% {
+    background-color: rgba(45, 106, 79, 0.04);
+    box-shadow: 0 0 0 0 rgba(45, 106, 79, 0);
+  }
+}
+
+.ProseMirror .sunnyd-crafting {
+  animation: sunnyd-craft 600ms ease-out forwards;
+  border-radius: 6px;
+}
+
+/* SunnyD thinking dot — pulsing green dot in left margin */
+@keyframes sunnyd-pulse-dot {
+  0% {
+    box-shadow: 0 0 0 0 rgba(45, 106, 79, 0.4);
+  }
+  60% {
+    box-shadow: 0 0 0 7px rgba(45, 106, 79, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(45, 106, 79, 0);
+  }
+}
+
+.sunnyd-thinking-dot {
+  animation: sunnyd-pulse-dot 1.1s ease-in-out infinite;
+}
+
+/* Proactive card border colors (data-card-type / inline style) */
+.ProseMirror .sunnyd-card[data-card-type="QUESTION"] {
+  border-left-color: rgba(59, 130, 246, 0.4);
+}
+.ProseMirror .sunnyd-card[data-card-type="QUIZ"] {
+  border-left-color: rgba(139, 92, 246, 0.4);
+}
+.ProseMirror .sunnyd-card[data-card-type="GAP"] {
+  border-left-color: rgba(245, 158, 11, 0.4);
+}
+.ProseMirror .sunnyd-card[data-card-type="CONNECT"] {
+  border-left-color: rgba(20, 184, 166, 0.4);
+}
+.ProseMirror .sunnyd-card[data-card-type="PUSHBACK"] {
+  border-left-color: rgba(249, 115, 22, 0.4);
+}
+
+/* QUIZ card — reveal button */
+.ProseMirror .sunnyd-quiz-reveal {
+  font-size: 11px;
+  color: rgba(45, 106, 79, 0.8);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 0;
+  margin-top: 4px;
+  font-family: "DM Sans", sans-serif;
+  transition: color 100ms;
+}
+.ProseMirror .sunnyd-quiz-reveal:hover {
+  color: rgba(45, 106, 79, 1);
+}
+.ProseMirror .sunnyd-quiz-a {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+/* Images in editor - responsive, rounded */
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 0.75em 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
