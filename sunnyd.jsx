@@ -41,6 +41,23 @@ const CATS = {
   research: { label: "Research",    color: "#0A6868", bg: "#EDFAFA", border: "#7ECCCC", icon: "⊞" },
 };
 
+/* Parse [text](url) markdown links and return React elements */
+function parseWithLinks(text, keyPrefix = "l") {
+  if (!text) return null;
+  const re = /\[([^\]]+)\]\(([^)]+)\)/g;
+  const parts = [];
+  let lastIdx = 0;
+  let match;
+  let i = 0;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > lastIdx) parts.push(<span key={`${keyPrefix}-${i++}`} style={{ whiteSpace: "pre-wrap" }}>{text.slice(lastIdx, match.index)}</span>);
+    parts.push(<a key={`${keyPrefix}-${i++}`} href={match[2]} target="_blank" rel="noopener noreferrer" className="hl-link">{match[1]}</a>);
+    lastIdx = match.index + match[0].length;
+  }
+  if (lastIdx < text.length) parts.push(<span key={`${keyPrefix}-${i++}`} style={{ whiteSpace: "pre-wrap" }}>{text.slice(lastIdx)}</span>);
+  return parts.length > 0 ? parts : <span key={keyPrefix} style={{ whiteSpace: "pre-wrap" }}>{text}</span>;
+}
+
 /* Find the best matching range in content for a suggestion (for highlighting) */
 function findSuggestionRange(content, sugg) {
   const norm = s => (s || "").replace(/\s+/g, " ").trim();
@@ -216,6 +233,13 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .hdr-dot{width:5px;height:5px;border-radius:50%;background:var(--rule2);transition:background .25s;flex-shrink:0;}
 .hdr-pill.live .hdr-dot{background:var(--ink);animation:dotBlink 1.2s ease-in-out infinite;}
 @keyframes dotBlink{0%,100%{opacity:1}50%{opacity:.2}}
+
+/* Suggestion frequency bar */
+.sugg-freq-bar{display:flex;align-items:center;gap:10px;padding:6px 18px;background:var(--paper);border-bottom:1px solid rgba(215,205,188,.5);flex-shrink:0;}
+.sugg-freq-lbl{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);opacity:.8;}
+.sugg-freq-btn{padding:4px 12px;border-radius:6px;border:1px solid var(--rule);background:var(--page);font-size:11px;font-weight:500;color:var(--ink2);cursor:pointer;transition:all .2s;font-family:'DM Sans',sans-serif;}
+.sugg-freq-btn:hover{border-color:var(--rule2);color:var(--ink);}
+.sugg-freq-btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink);}
 .hdr-r{display:flex;align-items:center;gap:10px;}
 .hdr-wc{font-size:11px;color:var(--ink3);opacity:.6;}
 .btn-link{font-size:11px;color:var(--ink3);background:none;border:none;cursor:pointer;padding:3px 7px;border-radius:4px;transition:background .15s;}
@@ -261,7 +285,8 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .ann-badge{padding:1px 7px;border-radius:10px;background:var(--paper);border:1px solid var(--rule2);color:var(--ink2);font-size:9px;font-weight:700;}
 .divider{height:1px;background:var(--rule);margin-bottom:26px;}
 .ta-wrap{position:relative;width:100%;}
-.hl-layer{position:absolute;inset:0;font-family:'DM Sans',sans-serif;font-size:16px;line-height:1.85;white-space:pre-wrap;word-break:break-word;color:var(--ink);pointer-events:none;overflow:hidden;z-index:0;}
+.hl-layer{position:absolute;inset:0;font-family:'DM Sans',sans-serif;font-size:16px;line-height:1.85;white-space:pre-wrap;word-break:break-word;color:var(--ink);pointer-events:none;overflow:hidden;z-index:2;}
+.hl-layer.has-sel-preview{pointer-events:auto;z-index:2;overflow:visible;}
 .hf{text-decoration:underline;text-decoration-style:wavy;text-decoration-color:rgba(160,105,30,.5);text-decoration-thickness:1.5px;text-underline-offset:3px;background:rgba(210,160,60,.1);border-radius:2px;}
 .hf.fresh{animation:annFresh .6s ease forwards;}
 @keyframes annFresh{0%{background:rgba(210,160,60,.32)}100%{background:rgba(210,160,60,.1)}}
@@ -271,6 +296,8 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .ta{position:relative;z-index:1;display:block;width:100%;min-height:460px;background:transparent;color:transparent;caret-color:var(--ink);font-family:'DM Sans',sans-serif;font-size:16px;line-height:1.85;padding:0;border:none;outline:none;resize:none;word-break:break-word;}
 .ta:read-only{cursor:default;}
 .ta::placeholder{color:#C8C0B4;}
+.hl-link{color:#0A6868;text-decoration:underline;text-underline-offset:2px;pointer-events:auto;cursor:pointer;}
+.hl-link:hover{color:#085555;}
 .ghost-inline{color:rgba(155,148,138,0.75);animation:ghostFadeIn .35s ease forwards;}
 @keyframes ghostFadeIn{from{opacity:0}to{opacity:1}}
 .ghost-thinking-inline{color:var(--ink3);margin-left:3px;}
@@ -330,6 +357,13 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .dc-close{background:none;border:none;color:#C0B8AE;cursor:pointer;font-size:17px;line-height:1;padding:0;}
 .dc-close:hover{color:#3C2F1E;}
 .dc-body{font-family:'DM Sans',sans-serif;font-size:13.5px;line-height:1.7;color:#3C2F1E;margin-bottom:14px;}
+.dc-body a{color:#0A6868;text-decoration:underline;text-underline-offset:2px;}
+.dc-body a:hover{color:#085555;}
+.dc-articles{margin-bottom:12px;}
+.dc-art-link{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:5px;background:rgba(10,104,104,.08);border:1px solid rgba(10,104,104,.2);margin-bottom:6px;text-decoration:none;color:#0A6868;font-size:11px;transition:all .15s;}
+.dc-art-link:hover{background:rgba(10,104,104,.14);border-color:#0A6868;}
+.dc-art-src{font-weight:700;text-transform:uppercase;letter-spacing:.05em;flex-shrink:0;}
+.dc-art-title{flex:1;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .dc-btns{display:flex;gap:8px;}
 .dc-apply{padding:7px 14px;background:#1A5C32;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;transition:opacity .17s;}
 .dc-apply:hover{opacity:.85;}
@@ -407,13 +441,18 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .sel-act-lbl{font-size:12.5px;font-weight:600;color:var(--ink);line-height:1.2;}
 .sel-act-desc{font-size:10px;color:var(--ink3);}
 
-/* ── Sel result panel ── */
-.sel-panel{margin-top:18px;padding:18px 20px;background:var(--paper);border:1px solid var(--rule);border-radius:6px;opacity:0;animation:fadeSoft .25s ease forwards;}
-.sp-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
-.sp-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);}
-.sp-orig{font-family:'DM Sans',sans-serif;font-size:12px;color:#BCB4A8;margin-bottom:12px;line-height:1.5;padding-left:10px;border-left:2px solid var(--rule2);}
-.sp-body{font-size:14.5px;color:var(--ink2);line-height:1.72;font-family:'DM Sans',sans-serif;font-weight:400;}
-.sp-btns{display:flex;gap:7px;margin-top:14px;flex-wrap:wrap;}
+/* ── Selection inline preview (below highlighted section) ── */
+.sel-pending{background:rgba(94,56,160,.1);border-bottom:2px solid rgba(94,56,160,.3);border-radius:2px 2px 0 0;}
+.sel-strike{background:rgba(184,48,48,.08);text-decoration:line-through;text-decoration-color:var(--red);color:var(--ink3);border-radius:2px;}
+.sel-inline-add{display:block;font-family:'DM Sans',sans-serif;font-size:16px;line-height:1.85;color:var(--ink3);opacity:.85;background:rgba(26,104,53,.06);border-radius:2px;padding:4px 6px;margin:4px 0;max-height:320px;overflow-y:auto;overflow-x:hidden;white-space:pre-wrap;word-break:break-word;pointer-events:auto;}
+.sel-inline-preview{margin:10px 0 18px;padding:14px 18px;background:var(--page);border:1px solid var(--rule2);border-radius:10px;box-shadow:0 4px 16px rgba(50,35,15,.08);animation:selPreviewIn .4s cubic-bezier(.22,1,.36,1) forwards;pointer-events:auto;cursor:default;}
+.sel-overview{font-size:12px;color:var(--ink2);line-height:1.5;margin-bottom:14px;font-weight:500;}
+.sel-preview-btns{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+.btn-apply{padding:8px 18px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:600;letter-spacing:.02em;transition:all .15s;white-space:nowrap;}
+.btn-apply:hover{opacity:.9;transform:translateY(-1px);}
+.btn-decline{padding:8px 18px;background:var(--red);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:600;letter-spacing:.02em;transition:all .15s;white-space:nowrap;}
+.btn-decline:hover{opacity:.9;transform:translateY(-1px);}
+@keyframes selPreviewIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
 
 /* ── Pop ── */
 .pop{position:fixed;z-index:9998;width:330px;background:var(--page);border-radius:10px;border:1px solid var(--rule2);box-shadow:0 10px 34px rgba(50,35,15,.1);padding:16px 18px;animation:cardRise .18s cubic-bezier(.22,1,.36,1);}
@@ -605,6 +644,7 @@ export default function SunnyDNotes() {
   const [statusTxt,   setStatus]      = useState("");
   const [copied,      setCopied]      = useState(false);
   const [weaveRect,   setWeaveRect]   = useState(null);
+  const [suggFreq,    setSuggFreq]    = useState(() => { try { return sessionStorage.getItem("sd_suggFreq") || "balanced"; } catch { return "balanced"; } });
 
   const taRef       = useRef(null);
   const hlRef       = useRef(null);
@@ -617,9 +657,15 @@ export default function SunnyDNotes() {
   const lastScannedContent = useRef({});
   const ghostBusy   = useRef(false);
   const newSuggIds  = useRef(new Set());
+  const busyWithSelAction = useRef(false);
 
   const saveKey  = k => { try { sessionStorage.setItem("sd_key", k); } catch {} setApiKey(k); };
   const resetKey = () => { try { sessionStorage.removeItem("sd_key"); } catch {} setApiKey(""); };
+  const setSuggFreqAndSave = v => {
+    setSuggFreq(v);
+    try { sessionStorage.setItem("sd_suggFreq", v); } catch {}
+    if (v === "off") setSugg(p => p.filter(s => s.noteId !== activeId));
+  };
 
   const note       = notes.find(n => n.id === activeId) || notes[0];
   const content    = note.content;
@@ -692,47 +738,84 @@ export default function SunnyDNotes() {
 
     const overlaps = (a, b) => a.start < b.end && a.end > b.start;
 
-    // Merge and sort all ranges; docked (href) overrides sugg for same span
+    // Merge and sort all ranges
     const baseRanges = [...annRanges];
     if (suggRange && (!dockedRange || !overlaps(suggRange, dockedRange))) baseRanges.push(suggRange);
     if (dockedRange) baseRanges.push(dockedRange);
     const ranges = baseRanges.sort((a, b) => a.start - b.start);
 
-    const out = [];
-    let p = 0;
+    const sel = selRes;
+    const selStart = sel?.start ?? -1;
+    const selEnd = sel?.end ?? -1;
+    const hasSel = sel && selStart >= 0 && selEnd <= content.length;
 
-    for (const r of ranges) {
-      if (r.start < p) continue;
-      if (r.start > p) out.push(<span key={`t${p}`} style={{ whiteSpace: "pre-wrap" }}>{content.slice(p, r.start)}</span>);
-
+    const renderRange = (r) => {
       const addHref = dockedRange && overlaps(r, dockedRange);
       const hrefStyle = dockedRange?.cat ? { background: dockedRange.cat.bg, border: `1px solid ${dockedRange.cat.color}`, borderRadius: "3px" } : {};
       if (r.kind === "ann") {
         const cls = r.cls + (addHref ? " href" : "");
-        out.push(<span key={r.id} className={cls} style={{ whiteSpace: "pre-wrap", ...(addHref ? hrefStyle : {}) }}>{content.slice(r.start, r.end)}</span>);
-      } else if (r.kind === "ref") {
-        out.push(<span key="href" className="href" style={{ whiteSpace: "pre-wrap", ...hrefStyle }}>{content.slice(r.start, r.end)}</span>);
-      } else {
-        // Suggestion highlight: use category bg + border colors for a natural glow
-        out.push(
-          <span
-            key="shl"
-            className="hs"
-            style={{
-              whiteSpace: "pre-wrap",
-              background: r.cat.bg,
-              boxShadow: `0 0 0 1.5px ${r.cat.border}`,
-              borderRadius: "2px",
-            }}
-          >
-            {content.slice(r.start, r.end)}
-          </span>
-        );
+        return <span key={r.id} className={cls} style={{ whiteSpace: "pre-wrap", ...(addHref ? hrefStyle : {}) }}>{content.slice(r.start, r.end)}</span>;
       }
-      p = r.end;
+      if (r.kind === "ref") return <span key="href" className="href" style={{ whiteSpace: "pre-wrap", ...hrefStyle }}>{content.slice(r.start, r.end)}</span>;
+      return (
+        <span key="shl" className="hs" style={{ whiteSpace: "pre-wrap", background: r.cat.bg, boxShadow: `0 0 0 1.5px ${r.cat.border}`, borderRadius: "2px" }}>
+          {content.slice(r.start, r.end)}
+        </span>
+      );
+    };
+
+    const renderSegment = (segStart, segEnd, excludeSel, keyPrefix) => {
+      const segRanges = excludeSel && hasSel ? ranges.filter(r => r.end <= selStart || r.start >= selEnd) : ranges;
+      const segRangesFiltered = segRanges.filter(r => r.start < segEnd && r.end > segStart);
+      const out = [];
+      let p = segStart;
+      for (const r of segRangesFiltered.sort((a, b) => a.start - b.start)) {
+        if (r.start < p) continue;
+        if (r.start > p) out.push(<span key={`${keyPrefix}-${p}`}>{parseWithLinks(content.slice(p, r.start), `${keyPrefix}-${p}`)}</span>);
+        out.push(renderRange(r));
+        p = r.end;
+      }
+      if (p < segEnd) out.push(<span key={`${keyPrefix}-${p}`}>{parseWithLinks(content.slice(p, segEnd), `${keyPrefix}-${p}`)}</span>);
+      return out;
+    };
+
+    if (hasSel) {
+      const selText = content.slice(selStart, selEnd);
+      const showStrike = sel.op === "replace" || sel.op === "delete";
+      const showAdd = !!sel.text;
+      return (
+        <>
+          {renderSegment(0, selStart, true, "pre")}
+          {showAdd && sel.op === "add_before" && (
+            <span key="add-before" className="sel-inline-add" style={{ whiteSpace: "pre-wrap" }}>{sel.text}{"\n\n"}</span>
+          )}
+          <span key="sel" className={showStrike ? "sel-strike" : "sel-pending"} style={{ whiteSpace: "pre-wrap" }}>{selText}</span>
+          {showAdd && (sel.op === "replace" || sel.op === "add_after" || (sel.op === "delete" && sel.text)) && (
+            <span key="add-inline" className="sel-inline-add" style={{ whiteSpace: "pre-wrap" }}>{(sel.op === "add_after" ? "\n\n" : "")}{sel.text}</span>
+          )}
+          <div key="preview" className="sel-inline-preview" onClick={e => e.stopPropagation()}>
+            {sel.explanation && <div className="sel-overview">{sel.explanation}</div>}
+            <div className="sel-preview-btns">
+              <button className="btn-apply" onClick={e => { e.stopPropagation(); weaveSelResult(); }}>Apply</button>
+              <button className="btn-decline" onClick={e => { e.stopPropagation(); setSelRes(null); }}>Decline</button>
+            </div>
+          </div>
+          {renderSegment(selEnd, content.length, true, "post")}
+          {ghostThinking && !ghost && <span key="gt" className="ghost-thinking-inline"><span className="think-dots"><span /><span /><span /></span></span>}
+          {ghost && <span key="gh" className="ghost-inline">{ghost.text}</span>}
+        </>
+      );
     }
 
-    if (p < content.length) out.push(<span key="tend" style={{ whiteSpace: "pre-wrap" }}>{content.slice(p)}</span>);
+    const out = [];
+    let p = 0;
+    for (const r of ranges) {
+      if (r.start < p) continue;
+      if (r.start > p) out.push(<span key={`t${p}`}>{parseWithLinks(content.slice(p, r.start), `t${p}`)}</span>);
+      out.push(renderRange(r));
+      p = r.end;
+    }
+    if (p < content.length) out.push(<span key="tend">{parseWithLinks(content.slice(p), "tend")}</span>);
     if (p === 0 && content.length === 0) out.push(<span key="empty" />);
 
     // Inline ghost: thinking dots or completion text
@@ -782,7 +865,7 @@ export default function SunnyDNotes() {
 
   /* ── Fact check: adds to right-panel suggestions only (highlight on hover) ── */
   async function runFactCheck(text) {
-    if (busy) return;
+    if (!suggestionsOn || busy) return;
     const sents = text.match(/[A-Z][^.!?\n]{20,}[.!?]/g) || [];
     for (const s of sents) {
       const t = s.trim();
@@ -805,7 +888,17 @@ Accurate or opinion: {"check":false}`,
             detail: p2.correction,
             apply: p2.replacement,
           };
-          setSugg(p => [...p.filter(s => s.noteId !== activeId || s.textRef !== t), sugg]);
+          const newRange = findSuggestionRange(text, sugg);
+          const overlaps = (a, b) => a && b && a.start < b.end && a.end > b.start;
+          setSugg(p => {
+            const others = p.filter(s => s.noteId !== activeId);
+            const forThis = p.filter(s => s.noteId === activeId);
+            const nonOverlapping = forThis.filter(s => {
+              const r = findSuggestionRange(text, s);
+              return !r || !newRange || !overlaps(r, newRange);
+            });
+            return [...others, ...nonOverlapping, sugg];
+          });
           setShownSuggIds(prev => new Set([...prev, sugg.id]));
         }
       } catch (e) { console.error(e); }
@@ -814,8 +907,14 @@ Accurate or opinion: {"check":false}`,
     }
   }
 
-  /* ── Generate suggestions: re-scans every pause, uses all notes for context ── */
+  /* ── Suggestion density: min suggestions (words per suggestion — higher = fewer) ── */
+  const SUGG_WORDS_PER = { zen: 85, balanced: 45, eager: 22 };
+
+  const suggestionsOn = suggFreq !== "off";
+
+  /* ── Generate suggestions: merges new ones, doesn't replace existing ── */
   async function generateSuggestions(noteId, text, allNotes) {
+    if (!suggestionsOn) return;
     if (!text.trim() || text.length < 40) return;
     // Skip if content hasn't changed since last successful scan
     if (lastScannedContent.current[noteId] === text) return;
@@ -826,8 +925,15 @@ Accurate or opinion: {"check":false}`,
       ? `\n\nFor context, the user's other notes:\n${otherNotes.map(n => `[${n.title}]:\n${n.content.slice(0, 400)}`).join("\n\n")}`
       : "";
 
-    // Clear existing suggestions for this note so new ones replace them
-    setSugg(p => p.filter(s => s.noteId !== noteId));
+    const prevContent = lastScannedContent.current[noteId] || "";
+    const hasNewText = text.length > prevContent.length || text !== prevContent;
+    const focusNew = hasNewText && prevContent.length > 20
+      ? `\n\nIMPORTANT: The user has added or changed content since the last analysis. Focus suggestions on the NEW or CHANGED portions. Avoid suggesting for text that was already analyzed.`
+      : "";
+
+    const wc = (text.match(/\S+/g) || []).length;
+    const wordsPer = SUGG_WORDS_PER[suggFreq] ?? 45;
+    const minSugg = Math.max(1, Math.ceil(wc / wordsPer));
 
     setBusy(true); setStatus("Analyzing…");
     try {
@@ -840,6 +946,8 @@ Each item schema:
 
 CRITICAL — textRef: Every suggestion MUST have textRef. Copy the exact phrase from the note (10–80 chars) that this suggestion refers to. This enables highlighting. Never use null.
 
+CRITICAL — NO DUPLICATES: Each suggestion MUST reference a DIFFERENT, NON-OVERLAPPING section of the note. Never suggest the same text twice. Never have two suggestions apply to the same or overlapping text. Each textRef must be unique and span a distinct part of the note. If two ideas apply to the same sentence, pick only the best one.
+
 CRITICAL — preview: Exactly 3–6 words. A short teaser shown in the panel. Full detail goes in "detail" (shown when user clicks "...more"). Never exceed 6 words.
 
 Categories (use exact keys) — do NOT suggest "question"; questions are handled inline when detected:
@@ -847,11 +955,13 @@ Categories (use exact keys) — do NOT suggest "question"; questions are handled
 - "expand": ideas worth developing further
 - "clarity": sentences that could be clearer or better structured
 - "explain": concepts or terms that deserve a simpler explanation
-- "research": cite key claims that are TRUE and IMPORTANT — only suggest when a claim deserves a peer-reviewed source. FOR THESE ONLY, populate "articles":
-  [{"title":"Article title","url":"https://doi.org/... or journal URL","source":"Journal Name (e.g. Nature, Science, PubMed)"}]
-  Use 2-3 real peer-reviewed article URLs (DOI, PubMed, or journal links). Do NOT use Wikipedia.
+- "research": cite key claims that are TRUE and IMPORTANT — only suggest when a claim deserves real sources. FOR THESE ONLY:
+  - Populate "articles": [{"title":"Short descriptive title","url":"REAL working URL","source":"Source name"}]
+  - Use 2-3 REAL, VERIFIABLE URLs. Prefer: DOI (https://doi.org/10.1234/...), PubMed (https://pubmed.ncbi.nlm.nih.gov/12345678/), Nature, Science, .gov sites, or reputable journals. NO Wikipedia. URLs must be real and working — use your knowledge of real papers and sources.
+  - Set "apply" to the inline text to add, with markdown links: e.g. "Research supports this: [Smith et al., Nature 2020](https://doi.org/10.1038/...)." Include 1-2 sentence context + links. Use the EXACT URLs from "articles".
+  - "detail" must summarize the actual research findings and why they matter — include specific facts, numbers, or conclusions from the sources. Add inline markdown links in detail too: [source name](url).
 
-Generate 1-3 per category only where genuinely helpful.`,
+Generate at least ${minSugg} suggestions (${wc} words). Add more if the note genuinely warrants it — don't hold back when there are clear opportunities. Pick the most valuable.${focusNew}`,
         `Active note:\n\n${text}${crossCtx}`, 1500);
 
       const cleaned = raw.replace(/```json|```/g, "").trim();
@@ -859,12 +969,41 @@ Generate 1-3 per category only where genuinely helpful.`,
       const arr = match ? JSON.parse(match[0]) : JSON.parse(cleaned);
       if (Array.isArray(arr) && arr.length > 0) {
         const newSugg = arr
-          .filter(s => s.cat !== "question") // Questions are inline-only, not in suggestion panel
+          .filter(s => s.cat !== "question")
           .map(s => ({ ...s, id: uid(), noteId }));
-        setSugg(p => [...p.filter(s => s.noteId !== noteId), ...newSugg]);
-        lastScannedContent.current[noteId] = text; // Only cache on success so we retry on failure
+        // Overlap check: two ranges overlap if a.start < b.end && a.end > b.start
+        const overlaps = (a, b) => a && b && a.start < b.end && a.end > b.start;
+        // Merge: keep existing valid suggestions, add new ones (no duplicate textRefs, no overlapping sections)
+        setSugg(p => {
+          const others = p.filter(s => s.noteId !== noteId);
+          const forThis = p.filter(s => s.noteId === noteId);
+          const validExisting = forThis.filter(s => s.textRef && text.includes(s.textRef));
+          const existingRanges = validExisting.map(s => findSuggestionRange(text, s)).filter(Boolean);
+          const existingRefs = new Set(validExisting.map(s => (s.textRef || "").trim()));
+          // Filter new: must have valid ref, not duplicate ref, not overlap with existing
+          let candidates = newSugg.filter(s => {
+            const ref = (s.textRef || "").trim();
+            if (!ref || !text.includes(ref) || existingRefs.has(ref)) return false;
+            const r = findSuggestionRange(text, s);
+            if (!r) return false;
+            if (existingRanges.some(ex => overlaps(r, ex))) return false;
+            return true;
+          });
+          // Among candidates, drop any that overlap with each other (keep first)
+          const kept = [];
+          const keptRanges = [];
+          for (const s of candidates) {
+            const r = findSuggestionRange(text, s);
+            if (!r) continue;
+            if (keptRanges.some(kr => overlaps(r, kr))) continue;
+            kept.push(s);
+            keptRanges.push(r);
+          }
+          return [...others, ...validExisting, ...kept];
+        });
+        lastScannedContent.current[noteId] = text;
       } else if (Array.isArray(arr)) {
-        lastScannedContent.current[noteId] = text; // Empty array is valid — nothing to suggest
+        lastScannedContent.current[noteId] = text;
       }
     } catch (e) {
       console.error("sugg:", e);
@@ -873,6 +1012,17 @@ Generate 1-3 per category only where genuinely helpful.`,
   }
 
   /* ── Q scan: detect all questions inline (highlighted, click to get answer) ── */
+  function isSimilarToAnswered(candidate) {
+    if (dismissed.current.q.has(candidate)) return true;
+    const norm = s => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+    const nc = norm(candidate);
+    for (const d of dismissed.current.q) {
+      const nd = norm(d);
+      if (nc === nd) return true;
+      if (nc.length >= 12 && nd.length >= 12 && (nc.includes(nd) || nd.includes(nc))) return true;
+    }
+    return false;
+  }
   function scanQ(text) {
     const candidates = [];
     for (const line of text.split("\n")) {
@@ -883,7 +1033,7 @@ Generate 1-3 per category only where genuinely helpful.`,
       }
     }
     for (const t of [...new Set(candidates)]) {
-      if (dismissed.current.q.has(t) || processedQ.current.has(t)) continue;
+      if (isSimilarToAnswered(t) || processedQ.current.has(t)) continue;
       processedQ.current.add(t);
       setTimeout(() => setAnns(p => p.some(a => a.text === t && a.noteId === activeId) ? p
         : [...p, { id: uid(), noteId: activeId, text: t, type: "q", fresh: true, data: {} }]), 1500);
@@ -933,9 +1083,11 @@ If the fragment could already be a complete sentence (they may have just forgott
     const snapId = activeId;
     const snapNotes = notes;
     timers.current.t = setTimeout(() => runGhost(v, cur), 4800);
-    timers.current.f = setTimeout(() => runFactCheck(v), 5500);
+    if (suggestionsOn) {
+      timers.current.f = setTimeout(() => runFactCheck(v), 5500);
+      timers.current.s = setTimeout(() => generateSuggestions(snapId, v, snapNotes), 7000);
+    }
     timers.current.q = setTimeout(() => scanQ(v), 2200);
-    timers.current.s = setTimeout(() => generateSuggestions(snapId, v, snapNotes), 5000);
   };
 
   const handleKeyDown = e => {
@@ -967,24 +1119,65 @@ If the fragment could already be a complete sentence (they may have just forgott
       if (start === end) { setSelMenu(null); return; }
       const text = ta.value.slice(start, end).trim();
       if (text.length < 10) { setSelMenu(null); return; }
-      setSelMenu({ text, x: mouseX, y: mouseY - 10 });
+      setSelMenu({ text, start, end, x: mouseX, y: mouseY - 10 });
     }, 25);
   };
 
   const handleSelAction = async action => {
     if (!selMenu) return;
-    const t = selMenu.text; setSelMenu(null);
+    busyWithSelAction.current = true;
+    clearTimeout(timers.current.s);
+    clearTimeout(timers.current.f);
+    const { text: t, start, end } = selMenu;
+    const fullContext = content;
+    const noteTitle = note?.title || "Untitled";
+    const ctxBefore = content.slice(Math.max(0, start - 220), start);
+    const ctxAfter = content.slice(end, Math.min(content.length, end + 220));
+    const isStartOfSentence = /(^|[.!?\n]\s*)$/.test(ctxBefore);
+    const isEndOfSentence = /^([.!?]|\s|$)/.test(ctxAfter) || ctxAfter.length === 0;
+    const isMidSentence = !isStartOfSentence && !isEndOfSentence;
+    setSelMenu(null);
     setBusy(true); setStatus({ summarize: "Summarizing…", expand: "Expanding…", explain: "Explaining…" }[action]);
+    const sys = `You are SunnyD. Return ONLY valid JSON, no markdown. Schema: {"op":"replace"|"add_after"|"add_before"|"delete","text":"...","explanation":"..."}
+- "replace": replace the selection with your response (use for summarize or when rewriting)
+- "add_after": keep selection, add your response after it. Your "text" MUST include any leading space, punctuation, or newlines for natural flow (e.g. " (i.e., ...)" or " — " for inline; newline for new paragraph).
+- "add_before": keep selection, add your response before it. Your "text" MUST include trailing space or newlines for natural flow.
+- "delete": remove the selection, put your response in "text" if replacing with something shorter.
+"explanation": REQUIRED. 1–2 sentences max. Brief overview of what SunnyD will do.`;
+    const otherNotes = notes.filter(n => n.id !== activeId);
+    const crossCtx = otherNotes.length > 0
+      ? `\n\nOther notes (for topic context):\n${otherNotes.map(n => `[${n.title}]: ${n.content.slice(0, 200)}${n.content.length > 200 ? "…" : ""}`).join("\n\n")}`
+      : "";
+    const ctxBlock = `Note title: "${noteTitle}"
+
+Text BEFORE the selection (for flow):
+"${ctxBefore}"
+
+Selected text:
+"${t}"
+
+Text AFTER the selection (for flow):
+"${ctxAfter}"
+
+Insertion context: Selection is ${isMidSentence ? "mid-sentence" : isStartOfSentence ? "at start of sentence" : "at end of sentence"}. Match the surrounding tone and structure.${crossCtx}`;
     const cfg = {
-      summarize: ["Summarize in 2–3 complete sentences. Do not truncate.", `Summarize:\n\n"${t}"`],
-      expand:    ["Expand with depth, context, and examples in 4–6 complete sentences. Do not truncate.", `Expand:\n\n"${t}"`],
-      explain:   ["Explain simply in 2–4 complete sentences for a curious learner. Do not truncate.", `Explain:\n\n"${t}"`],
+      summarize: ["Summarize in 2–3 complete sentences. Do not truncate. Use surrounding context.", `${ctxBlock}\n\nFull note:\n\n${fullContext}`],
+      expand:    ["Expand with depth, context, examples in 4–6 sentences. Do not truncate. Use add_after. Your text must include leading newlines if starting a new paragraph.", `${ctxBlock}\n\nFull note:\n\n${fullContext}`],
+      explain:   ["Explain the selected term or phrase simply for a curious learner. Keep the original selection. Use add_after. Your explanation must flow naturally — use a parenthetical (like this), an em dash —, or a colon : depending on context. For mid-sentence: start your text with the connector, e.g. ' (i.e., ...)' or ' — '. For end of sentence: use ' — ' or newline for a new sentence. Do not truncate. Match the note tone.", ctxBlock],
     };
     try {
-      const result = await ai(apiKey, "You are SunnyD. " + cfg[action][0], cfg[action][1], 900);
-      setSelRes({ action, text: result, original: t });
-    } catch { }
-    finally { setBusy(false); setStatus(""); }
+      const raw = await ai(apiKey, sys + " " + cfg[action][0], cfg[action][1], 900);
+      const cleaned = raw.replace(/```json|```/g, "").trim();
+      const match = cleaned.match(/\{[\s\S]*\}/);
+      let parsed = { op: "replace", text: raw };
+      if (match) try { parsed = JSON.parse(match[0]); } catch { }
+      const op = ["replace", "add_after", "add_before", "delete"].includes(parsed.op) ? parsed.op : "replace";
+      const text = (parsed.text ?? raw).trim();
+      let explanation = (parsed.explanation ?? "").trim();
+      if (!explanation) explanation = action === "expand" ? "Adding expanded content after your selection." : action === "summarize" ? "Replacing with a concise summary." : "Applying the suggested change.";
+      setSelRes({ action, text, op, explanation, original: t, start, end });
+    } catch { setSelRes(null); }
+    finally { busyWithSelAction.current = false; setBusy(false); setStatus(""); }
   };
 
   /* ── Weave / apply ── */
@@ -994,6 +1187,7 @@ If the fragment could already be a complete sentence (they may have just forgott
     if (!ans) return;
     const idx = content.indexOf(a.text);
     if (idx === -1) return;
+    dismissed.current.q.add(a.text);
     setContent(content.slice(0, idx + a.text.length) + "\n\n" + ans + content.slice(idx + a.text.length));
     setAnns(p => p.filter(x => x.id !== id)); setPop(null); setTimeout(resize, 0);
   };
@@ -1007,28 +1201,30 @@ If the fragment could already be a complete sentence (they may have just forgott
 
   const applySuggestion = async s => {
     const currentContent = content; // capture at click-time before async gap
-    // Mark this card as "applying" so it shows the weaving spinner
     setSugg(p => p.map(x => x.id === s.id ? { ...x, applying: true } : x));
     setStatus("Weaving suggestion into notes…");
+
+    const articlesJson = s.articles && Array.isArray(s.articles) && s.articles.length > 0
+      ? JSON.stringify(s.articles)
+      : "[]";
 
     try {
       const weaved = await ai(
         apiKey,
-        `You are SunnyD. Your job is to intelligently integrate a writing suggestion into the user's notes.
+        `You are SunnyD. Integrate a writing suggestion into the user's notes.
 
-Return ONLY the complete updated notes text — no preamble, no explanation, no markdown fences, just the revised text.
+Return ONLY the complete updated notes text — no preamble, no markdown fences, just the revised text.
 
-Instructions by suggestion type:
-- "fact": Replace the inaccurate passage with the corrected information, keeping the same sentence structure.
-- "clarity": Rewrite the unclear passage to be clearer and more precise; preserve the original meaning.
-- "expand": Add the expanded content immediately after the referenced paragraph, separated by a blank line.
-- "research": Add a brief context note or citation inline after the referenced section.
-
-Maintain the user's voice and writing style throughout.`,
+By type:
+- "fact": Replace the inaccurate passage with the corrected information.
+- "clarity": Rewrite the unclear passage to be clearer; preserve the original meaning.
+- "expand": Add the expanded content after the referenced paragraph, separated by a blank line.
+- "research": Add a brief inline citation AFTER the referenced section. Use the provided articles to create markdown links: [link text](url). Example: "Research supports this: [Smith et al., Nature 2020](https://doi.org/...)." Include 1-2 sentence context + links. Use REAL URLs from the articles.`,
         `Suggestion type: ${s.cat}
 Referenced section: "${s.textRef || ""}"
 Suggestion: ${s.detail}
-Text to integrate: ${s.apply || s.detail}
+${s.cat === "research" ? `Articles to cite (use these exact URLs): ${articlesJson}\n` : ""}
+Text to integrate (use as-is or adapt): ${s.apply || s.detail}
 
 Current notes:
 ${currentContent}`,
@@ -1040,17 +1236,15 @@ ${currentContent}`,
       }
     } catch {
       // Graceful fallback: simple positional insert
-      if (s.apply || s.detail) {
-        const insertion = s.apply || s.detail;
-        if (s.textRef) {
-          const idx = currentContent.indexOf(s.textRef);
-          if (idx !== -1) {
-            setContent(currentContent.slice(0, idx + s.textRef.length) + "\n\n" + insertion + currentContent.slice(idx + s.textRef.length));
-            setSugg(p => p.filter(x => x.id !== s.id)); setTimeout(resize, 0); return;
-          }
+      const insertion = s.apply || s.detail;
+      if (insertion && s.textRef) {
+        const idx = currentContent.indexOf(s.textRef);
+        if (idx !== -1) {
+          setContent(currentContent.slice(0, idx + s.textRef.length) + "\n\n" + insertion + currentContent.slice(idx + s.textRef.length));
+          setSugg(p => p.filter(x => x.id !== s.id)); setTimeout(resize, 0); return;
         }
-        setContent(currentContent + "\n\n" + insertion);
       }
+      if (insertion) setContent(currentContent + "\n\n" + insertion);
     } finally {
       setSugg(p => p.filter(x => x.id !== s.id));
       setStatus("");
@@ -1060,9 +1254,17 @@ ${currentContent}`,
 
   const weaveSelResult = () => {
     if (!selRes) return;
-    const idx = content.indexOf(selRes.original);
-    if (idx !== -1) setContent(content.slice(0, idx + selRes.original.length) + "\n\n" + selRes.text + content.slice(idx + selRes.original.length));
-    setSelRes(null); setTimeout(resize, 0);
+    clearTimeout(timers.current.s);
+    clearTimeout(timers.current.f);
+    const { start, end, text, op } = selRes;
+    let next = content;
+    if (op === "replace") next = content.slice(0, start) + text + content.slice(end);
+    else if (op === "add_after") next = content.slice(0, end) + (text || "") + content.slice(end);
+    else if (op === "add_before") next = content.slice(0, start) + (text || "") + content.slice(start);
+    else if (op === "delete") next = content.slice(0, start) + (text || "") + content.slice(end);
+    setContent(next);
+    setSelRes(null);
+    setTimeout(resize, 0);
   };
 
   const dismiss = id => {
@@ -1123,10 +1325,13 @@ ${currentContent}`,
   };
 
   useEffect(() => {
-    const onKey = e => { if (e.key === "Escape" && dockedCard) closeDocked(); };
+    const onKey = e => {
+      if (e.key === "Escape" && dockedCard) closeDocked();
+      if (e.key === "Escape" && selRes) setSelRes(null);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dockedCard]);
+  }, [dockedCard, selRes]);
 
   /* ── Weave overlay: measure textRef rect when applying ── */
   useLayoutEffect(() => {
@@ -1169,12 +1374,12 @@ ${currentContent}`,
     checked.current = new Set(); processedQ.current = new Set();
     setGhost(null); setGhostThinking(false); setPop(null); setSelRes(null); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
     const snapNotes = notes;
-    const t1 = setTimeout(() => runFactCheck(content), 2500);
+    const t1 = suggestionsOn ? setTimeout(() => runFactCheck(content), 2500) : null;
     const t2 = setTimeout(() => scanQ(content), 1800);
-    const t3 = setTimeout(() => generateSuggestions(activeId, content, snapNotes), 3500);
+    const t3 = suggestionsOn ? setTimeout(() => generateSuggestions(activeId, content, snapNotes), 5000) : null;
     setTimeout(resize, 50);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
-  }, [activeId, apiKey]);
+    return () => { if (t1) clearTimeout(t1); clearTimeout(t2); if (t3) clearTimeout(t3); };
+  }, [activeId, apiKey, suggestionsOn]);
 
   /* ── Sorted shown suggestions by text position ── */
   const shownSugg = activeSugg.filter(s => shownSuggIds.has(s.id));
@@ -1184,8 +1389,8 @@ ${currentContent}`,
     const pb = b.textRef ? content.indexOf(b.textRef) : Infinity;
     return pa - pb;
   });
-  // Skeletons only show while AI is working with zero results yet — disappear the moment any card arrives
-  const showThinking = busy && activeSugg.length === 0;
+  // Skeletons only show while AI is generating suggestions — NOT when user runs selection actions (expand/summarize/explain)
+  const showThinking = busy && activeSugg.length === 0 && !busyWithSelAction.current;
 
   const popAnn = pop ? anns.find(a => a.id === pop.id) : null;
   const wc = (content.match(/\S+/g) || []).length;
@@ -1220,6 +1425,20 @@ ${currentContent}`,
             <button className="btn-link" onClick={resetKey}>Change key</button>
           </div>
         </header>
+
+        <div className="sugg-freq-bar">
+          <span className="sugg-freq-lbl">Suggestions:</span>
+          {[
+            { key: "off", label: "Off", desc: "No suggestions" },
+            { key: "zen", label: "Deep Zen", desc: "At least ~1 per 85 words" },
+            { key: "balanced", label: "Just Right", desc: "At least ~1 per 45 words" },
+            { key: "eager", label: "Eager Beaver", desc: "At least ~1 per 22 words" },
+          ].map(({ key, label, desc }) => (
+            <button key={key} className={`sugg-freq-btn${suggFreq === key ? " on" : ""}`} onClick={() => setSuggFreqAndSave(key)} title={desc}>
+              {label}
+            </button>
+          ))}
+        </div>
 
         <div className="layout">
 
@@ -1265,9 +1484,9 @@ ${currentContent}`,
                 </div>
                 <div className="divider" />
                 <div ref={taWrapRef} className="ta-wrap">
-                  <div ref={hlRef} className="hl-layer" aria-hidden="true">{renderHL()}</div>
+                  <div ref={hlRef} className={`hl-layer${selRes ? " has-sel-preview" : ""}`} aria-hidden="true">{renderHL()}</div>
                   <textarea ref={taRef} className="ta" value={content}
-                    readOnly={!!applyingSugg}
+                    readOnly={!!applyingSugg || !!selRes}
                     onChange={handleChange} onKeyDown={handleKeyDown}
                     onScroll={syncScroll} onClick={handleTaClick}
                     placeholder="Start writing — SunnyD will assist as you go." />
@@ -1301,22 +1520,6 @@ ${currentContent}`,
                   </div>
                 )}
 
-                {/* Selection result */}
-                {selRes && (
-                  <div className="sel-panel">
-                    <div className="sp-head">
-                      <span className="sp-lbl">{selRes.action.charAt(0).toUpperCase() + selRes.action.slice(1)}</span>
-                      <button className="x-btn" onClick={() => setSelRes(null)}>×</button>
-                    </div>
-                    <div className="sp-orig">"{selRes.original.length > 90 ? selRes.original.slice(0, 90) + "…" : selRes.original}"</div>
-                    <div className="sp-body">{selRes.text}</div>
-                    <div className="sp-btns">
-                      <button className="btn-fill" onClick={weaveSelResult}>Weave into notes</button>
-                      <button className="btn-ghost" onClick={() => { navigator.clipboard.writeText(selRes.text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>{copied ? "Copied" : "Copy"}</button>
-                      <button className="btn-out" onClick={() => setSelRes(null)}>Close</button>
-                    </div>
-                  </div>
-                )}
               </div>
 
               {/* Annotation column — slides off when card is docked */}
@@ -1348,7 +1551,9 @@ ${currentContent}`,
                 ))}
 
                 {activeSugg.length === 0 && !busy && (
-                  <p className="ann-empty">SunnyD reads your notes as you write and surfaces insights here.</p>
+                  <p className="ann-empty">
+                    {suggestionsOn ? "SunnyD reads your notes as you write and surfaces insights here." : "Suggestions are off. Turn them on above to get AI suggestions."}
+                  </p>
                 )}
               </div>
 
@@ -1393,13 +1598,21 @@ ${currentContent}`,
                     <span className="dc-type" style={{ color: cat.color }}>{cat.label}</span>
                     <button className="dc-close" onClick={closeDocked}>×</button>
                   </div>
-                  <div className="dc-body">{s.detail}</div>
+                  <div className="dc-body">{parseWithLinks(s.detail, `dc-${s.id}`)}</div>
+                  {s.cat === "research" && s.articles?.length > 0 && (
+                    <div className="dc-articles">
+                      {s.articles.slice(0, 3).map((a, i) => (
+                        <a key={i} className="dc-art-link" href={a.url} target="_blank" rel="noopener noreferrer">
+                          <span className="dc-art-src">{a.source || "Source"}</span>
+                          <span className="dc-art-title">{a.title || a.url}</span>
+                        </a>
+                      ))}
+                    </div>
+                  )}
                   <div className="dc-btns">
-                    {s.apply && (
-                      <button className="dc-apply" onClick={() => { applySuggestion(s); closeDocked(); }}>
-                        ✓ Apply
-                      </button>
-                    )}
+                    <button className="dc-apply" onClick={() => { applySuggestion(s); closeDocked(); }}>
+                      ✓ Apply
+                    </button>
                     <button className="dc-decline" onClick={() => { dismissSugg(s.id); closeDocked(); }}>
                       ✕ Decline
                     </button>
