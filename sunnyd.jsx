@@ -476,27 +476,32 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .x-btn:hover{color:var(--ink2);}
 
 /* ── Selection card ── */
-.sel-card{position:fixed;z-index:9999;transform:translateX(-50%);background:var(--page);border:1px solid var(--rule2);border-radius:10px;box-shadow:0 8px 28px rgba(50,35,15,.12);padding:5px;animation:cardRise .18s cubic-bezier(.22,1,.36,1);min-width:236px;}
-@keyframes cardRise{from{opacity:0;transform:translateX(-50%) translateY(7px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
-.sel-hd{padding:6px 10px 7px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);border-bottom:1px solid var(--rule);margin-bottom:3px;}
-.sel-act{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border-radius:7px;background:none;border:none;cursor:pointer;text-align:left;font-family:'DM Sans',sans-serif;transition:background .1s;}
-.sel-act:hover{background:var(--paper);}
-.sel-act-ic{width:26px;height:26px;border-radius:5px;background:var(--paper);border:1px solid var(--rule);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--ink2);flex-shrink:0;}
-.sel-act-lbl{font-size:12.5px;font-weight:600;color:var(--ink);line-height:1.2;}
-.sel-act-desc{font-size:10px;color:var(--ink3);}
+.sel-card{position:fixed;z-index:9999;transform:translateX(-50%);background:var(--page);border:1px solid var(--rule2);border-radius:12px;box-shadow:0 12px 40px rgba(50,35,15,.14),0 4px 12px rgba(50,35,15,.06);padding:6px;animation:cardRise .2s cubic-bezier(.22,1,.36,1);min-width:260px;}
+@keyframes cardRise{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+.sel-hd{padding:8px 12px 8px;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--ink3);border-bottom:1px solid var(--rule);margin-bottom:2px;opacity:.9;}
+.sel-act{display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border-radius:8px;background:none;border:none;cursor:pointer;text-align:left;font-family:'DM Sans',sans-serif;transition:all .15s;}
+.sel-act:hover{background:linear-gradient(135deg,var(--paper) 0%,rgba(248,244,237,.8) 100%);}
+.sel-act-ic{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,var(--paper) 0%,#EDE7DC 100%);border:1px solid var(--rule);display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--ink2);flex-shrink:0;}
+.sel-act:hover .sel-act-ic{background:linear-gradient(135deg,#EDE7DC 0%,#E5DDD4 100%);border-color:var(--rule2);}
+.sel-act-lbl{font-size:13px;font-weight:600;color:var(--ink);line-height:1.25;}
+.sel-act-desc{font-size:11px;color:var(--ink3);line-height:1.35;margin-top:1px;}
 
 /* ── Selection inline preview (below highlighted section) ── */
-.sel-pending{background:rgba(94,56,160,.1);border-bottom:2px solid rgba(94,56,160,.3);border-radius:2px 2px 0 0;}
-.sel-strike{background:rgba(184,48,48,.08);text-decoration:line-through;text-decoration-color:var(--red);color:var(--ink3);border-radius:2px;}
-.sel-inline-add{display:block;font-family:'DM Sans',sans-serif;font-size:16px;line-height:1.85;color:var(--ink3);opacity:.85;background:rgba(26,104,53,.06);border-radius:2px;padding:4px 6px;margin:4px 0;max-height:320px;overflow-y:auto;overflow-x:hidden;white-space:pre-wrap;word-break:break-word;pointer-events:auto;}
-.sel-inline-preview{margin:10px 0 18px;padding:14px 18px;background:var(--page);border:1px solid var(--rule2);border-radius:10px;box-shadow:0 4px 16px rgba(50,35,15,.08);animation:selPreviewIn .4s cubic-bezier(.22,1,.36,1) forwards;pointer-events:auto;cursor:default;}
-.sel-overview{font-size:12px;color:var(--ink2);line-height:1.5;margin-bottom:14px;font-weight:500;}
-.sel-preview-btns{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
-.btn-apply{padding:8px 18px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:600;letter-spacing:.02em;transition:all .15s;white-space:nowrap;}
-.btn-apply:hover{opacity:.9;transform:translateY(-1px);}
-.btn-decline{padding:8px 18px;background:var(--red);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:600;letter-spacing:.02em;transition:all .15s;white-space:nowrap;}
-.btn-decline:hover{opacity:.9;transform:translateY(-1px);}
-@keyframes selPreviewIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.sel-pending{background:rgba(94,56,160,.08);border-bottom:2px solid rgba(94,56,160,.25);border-radius:3px 3px 0 0;}
+.sel-strike{background:rgba(184,48,48,.06);text-decoration:line-through;text-decoration-color:var(--red);color:var(--ink3);border-radius:3px;}
+.sel-inline-add{display:block;font-family:'DM Sans',sans-serif;font-size:16px;line-height:1.85;color:var(--ink2);background:linear-gradient(135deg,rgba(26,104,53,.04) 0%,rgba(26,104,53,.08) 100%);border-radius:4px;padding:8px 12px;margin:6px 0;border-left:3px solid var(--green);max-height:320px;overflow-y:auto;overflow-x:hidden;white-space:pre-wrap;word-break:break-word;pointer-events:auto;}
+.sel-inline-preview{margin:14px 0 20px;padding:0;background:var(--page);border:1px solid var(--rule2);border-radius:12px;box-shadow:0 6px 24px rgba(50,35,15,.1),0 2px 8px rgba(50,35,15,.04);animation:selPreviewIn .4s cubic-bezier(.22,1,.36,1) forwards;pointer-events:auto;cursor:default;overflow:hidden;}
+.sel-preview-hdr{padding:10px 18px;background:linear-gradient(180deg,var(--paper) 0%,rgba(248,244,237,.6) 100%);border-bottom:1px solid var(--rule);}
+.sel-preview-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--ink3);}
+.sel-preview-body{font-family:'DM Sans',sans-serif;font-size:15px;line-height:1.75;color:var(--ink);padding:16px 18px;font-weight:400;}
+.sel-preview-hint{font-size:11px;color:var(--ink3);line-height:1.5;padding:0 18px 12px;font-weight:500;}
+.sel-overview{font-size:13px;color:var(--ink2);line-height:1.6;padding:16px 18px;font-weight:500;}
+.sel-preview-btns{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:14px 18px;background:var(--paper);border-top:1px solid var(--rule);}
+.sel-preview-btns .btn-apply{padding:9px 20px;background:var(--green);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:600;letter-spacing:.02em;transition:all .18s;white-space:nowrap;box-shadow:0 2px 8px rgba(26,104,53,.25);}
+.sel-preview-btns .btn-apply:hover{opacity:.92;transform:translateY(-1px);box-shadow:0 4px 12px rgba(26,104,53,.3);}
+.sel-preview-btns .btn-decline{padding:9px 20px;background:transparent;color:var(--ink3);border:1.5px solid var(--rule2);border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:600;letter-spacing:.02em;transition:all .18s;white-space:nowrap;}
+.sel-preview-btns .btn-decline:hover{background:rgba(184,48,48,.06);color:var(--red);border-color:rgba(184,48,48,.4);}
+@keyframes selPreviewIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
 
 /* ── Pop ── */
 .pop{position:fixed;z-index:9998;width:330px;max-height:calc(100vh - 48px);overflow-y:auto;background:var(--page);border-radius:10px;border:1px solid var(--rule2);box-shadow:0 10px 34px rgba(50,35,15,.1);padding:16px 18px;animation:cardRise .18s cubic-bezier(.22,1,.36,1);}
@@ -560,18 +565,18 @@ function KeyScreen({ onSave }) {
     <div className="key-screen">
       <div className="key-card">
         <div className="key-mark">S</div>
-        <div className="key-title">Welcome to SunnyD</div>
-        <div className="key-sub">An open-source intelligent notepad. Your API key stays in your browser — it's never stored on any server.</div>
+        <div className="key-title">SunnyD Notes</div>
+        <div className="key-sub">AI-assisted note-taking with full client-side control. Open-source and self-hosted — your API key is stored locally in your browser and is never transmitted to any server except OpenAI.</div>
         <label className="key-lbl">OpenAI API Key</label>
         <input className="key-inp" type="password" placeholder="sk-..." value={val}
           onChange={e => { setVal(e.target.value); setErr(""); }}
           onKeyDown={e => e.key === "Enter" && !loading && submit()} autoFocus />
         {err && <div className="key-err">{err}</div>}
         <button className="key-btn" onClick={submit} disabled={loading || !val.trim()}>
-          {loading ? "Connecting…" : "Get Started"}
+          {loading ? "Verifying…" : "Continue"}
         </button>
         <div className="key-note">
-          Get a key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">platform.openai.com/api-keys</a>
+          Obtain an API key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">platform.openai.com/api-keys</a>
         </div>
       </div>
     </div>
@@ -638,7 +643,7 @@ export default function SunnyDNotes() {
   const panelBodyRef = useRef(null);
   const [suggTops, setSuggTops] = useState({});
   const timers      = useRef({});
-  const dismissed   = useRef({ fact: new Set() });
+  const dismissed   = useRef({ fact: new Set(), research: new Set() });
   const checked     = useRef(new Set());
   const lastScannedContent = useRef({});
   const ghostBusy   = useRef(false);
@@ -757,7 +762,12 @@ export default function SunnyDNotes() {
             <span key="add-inline" className="sel-inline-add" style={{ whiteSpace: "pre-wrap" }}>{(sel.op === "add_after" ? "\n\n" : "")}{sel.text}</span>
           )}
           <div key="preview" className="sel-inline-preview" onClick={e => e.stopPropagation()}>
-            {sel.explanation && <div className="sel-overview">{sel.explanation}</div>}
+            <div className="sel-preview-hdr">
+              <span className="sel-preview-badge">{sel.action === "summarize" ? "Summary" : sel.action === "expand" ? "Expanded" : "Explanation"}</span>
+            </div>
+            {sel.text && <div className="sel-preview-body">{sel.text}</div>}
+            {sel.explanation && sel.text && <div className="sel-preview-hint">{sel.explanation}</div>}
+            {sel.explanation && !sel.text && <div className="sel-overview">{sel.explanation}</div>}
             <div className="sel-preview-btns">
               <button className="btn-apply" onClick={e => { e.stopPropagation(); weaveSelResult(); }}>Apply</button>
               <button className="btn-decline" onClick={e => { e.stopPropagation(); setSelRes(null); }}>Decline</button>
@@ -817,6 +827,19 @@ export default function SunnyDNotes() {
       const nd = norm(d);
       if (nt === nd) return true;
       if (nt.length >= 15 && nd.length >= 15 && (nt.includes(nd.slice(0, 25)) || nd.includes(nt.slice(0, 25)))) return true;
+    }
+    return false;
+  }
+  function isSimilarToResearchedSection(ref) {
+    const t = (ref || "").trim();
+    if (!t || t.length < 10) return false;
+    if (dismissed.current.research.has(t)) return true;
+    const norm = s => (s || "").toLowerCase().replace(/\s+/g, " ");
+    const nt = norm(t);
+    for (const r of dismissed.current.research) {
+      const nr = norm(r);
+      if (nt === nr) return true;
+      if (nt.length >= 15 && nr.length >= 15 && (nt.includes(nr.slice(0, 30)) || nr.includes(nt.slice(0, 30)))) return true;
     }
     return false;
   }
@@ -928,7 +951,7 @@ Categories (use exact keys):
 - "expand": ideas worth developing further
 - "clarity": sentences that could be clearer or better structured
 - "explain": concepts or terms that deserve a simpler explanation
-- "research": cite key claims that are TRUE and IMPORTANT — only suggest when a claim deserves real sources. FOR THESE ONLY:
+- "research": cite key claims that are TRUE and IMPORTANT — only suggest when a claim deserves real sources. NEVER suggest research for a passage that ALREADY has inline citations (e.g. "Research supports this:", markdown links like [Smith et al.](url), or similar). FOR THESE ONLY:
   - Populate "articles": [{"title":"Short descriptive title","url":"REAL working URL","source":"Source name"}]
   - Use 2-3 REAL, VERIFIABLE URLs. Prefer: DOI (https://doi.org/10.1234/...), PubMed (https://pubmed.ncbi.nlm.nih.gov/12345678/), Nature, Science, .gov sites, or reputable journals. NO Wikipedia. URLs must be real and working — use your knowledge of real papers and sources.
   - Set "apply" to the inline text to add, with markdown links: e.g. "Research supports this: [Smith et al., Nature 2020](https://doi.org/10.1038/...)." Include 1-2 sentence context + links. Use the EXACT URLs from "articles".
@@ -958,6 +981,7 @@ Generate at least ${minSugg} suggestions (${wc} words). Add more if the note gen
             const ref = (s.textRef || "").trim();
             if (!ref || !text.includes(ref) || existingRefs.has(ref)) return false;
             if (s.cat === "fact" && isSimilarToDismissedFact(ref)) return false;
+            if (s.cat === "research" && isSimilarToResearchedSection(ref)) return false;
             const r = findSuggestionRange(text, s);
             if (!r) return false;
             if (existingRanges.some(ex => overlaps(r, ex))) return false;
@@ -1044,6 +1068,7 @@ If the fragment could already be a complete sentence (they may have just forgott
     // Only clear checked/dismissed for text no longer in content
     checked.current = new Set([...checked.current].filter(t => v.includes(t)));
     dismissed.current.fact = new Set([...dismissed.current.fact].filter(t => v.includes(t)));
+    dismissed.current.research = new Set([...dismissed.current.research].filter(t => v.includes(t)));
 
     const snapId = activeId;
     const snapNotes = notes;
@@ -1075,6 +1100,7 @@ If the fragment could already be a complete sentence (they may have just forgott
       if (dockedCard?.suggestion && removedIds.has(dockedCard.suggestion.id)) { setDockedCard(null); setPanelHidden(false); }
       checked.current = new Set([...checked.current].filter(t => accepted.includes(t)));
       dismissed.current.fact = new Set([...dismissed.current.fact].filter(t => accepted.includes(t)));
+      dismissed.current.research = new Set([...dismissed.current.research].filter(t => accepted.includes(t)));
       if (suggestionsOn) {
         timers.current.f = setTimeout(() => runFactCheck(accepted), 5500);
         timers.current.s = setTimeout(() => generateSuggestions(activeId, accepted, notes), 7000);
@@ -1142,7 +1168,7 @@ Text AFTER the selection (for flow):
 
 Insertion context: Selection is ${isMidSentence ? "mid-sentence" : isStartOfSentence ? "at start of sentence" : "at end of sentence"}. Match the surrounding tone and structure.${crossCtx}`;
     const cfg = {
-      summarize: ["Summarize in 2–3 complete sentences. Do not truncate. Use surrounding context.", `${ctxBlock}\n\nFull note:\n\n${fullContext}`],
+      summarize: ["Summarize ONLY the selected text. Return a concise 2–3 sentence summary that captures the key points of what the user selected. Your response MUST be a direct condensation of the selection — do not add external context, opinions, or unrelated information. Preserve the main ideas. Do not truncate.", `${ctxBlock}\n\nFull note:\n\n${fullContext}`],
       expand:    ["Expand with depth, context, examples in 4–6 sentences. Do not truncate. Use add_after. Your text must include leading newlines if starting a new paragraph.", `${ctxBlock}\n\nFull note:\n\n${fullContext}`],
       explain:   ["Explain the selected term or phrase simply for a curious learner. Keep the original selection. Use add_after. Your explanation must flow naturally — use a parenthetical (like this), an em dash —, or a colon : depending on context. For mid-sentence: start your text with the connector, e.g. ' (i.e., ...)' or ' — '. For end of sentence: use ' — ' or newline for a new sentence. Do not truncate. Match the note tone.", ctxBlock],
     };
@@ -1206,7 +1232,12 @@ ${currentContent}`,
         if (idx !== -1) {
           newContent = currentContent.slice(0, idx + s.textRef.length) + "\n\n" + insertion + currentContent.slice(idx + s.textRef.length);
           setContent(newContent);
-          setSugg(p => p.filter(x => x.id !== s.id));
+          if (s.cat === "research" && s.textRef) dismissed.current.research.add(s.textRef.trim());
+          setSugg(p => p.filter(x => {
+            if (x.id === s.id) return false;
+            if (s.cat === "research" && x.cat === "research" && isSimilarToResearchedSection((x.textRef || "").trim())) return false;
+            return true;
+          }));
           lastScannedContent.current[activeId] = "";
           if (suggestionsOn && newContent) {
             if (s.cat === "fact" && s.apply) {
@@ -1231,7 +1262,12 @@ ${currentContent}`,
         setContent(newContent);
       }
     } finally {
-      setSugg(p => p.filter(x => x.id !== s.id));
+      if (s.cat === "research" && s.textRef) dismissed.current.research.add(s.textRef.trim());
+      setSugg(p => p.filter(x => {
+        if (x.id === s.id) return false;
+        if (s.cat === "research" && x.cat === "research" && isSimilarToResearchedSection((x.textRef || "").trim())) return false;
+        return true;
+      }));
       setStatus("");
       if (newContent && suggestionsOn) {
         lastScannedContent.current[activeId] = "";
@@ -1275,6 +1311,7 @@ ${currentContent}`,
   const dismissSugg = id => {
     const s = suggestions.find(x => x.id === id);
     if (s?.cat === "fact" && s?.textRef) dismissed.current.fact.add(s.textRef);
+    if (s?.cat === "research" && s?.textRef) dismissed.current.research.add(s.textRef.trim());
     setSugg(p => p.filter(x => x.id !== id));
     setShownSuggIds(prev => { const n = new Set(prev); n.delete(id); return n; });
   };
