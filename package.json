@@ -1,8 +1,16 @@
 {
   "name": "sunnyd-notetaker",
-  "private": true,
-  "version": "0.0.0",
+  "description": "Intelligent note-taking app powered by AI — fact checks, expansions, clarity, research citations",
+  "version": "1.0.0",
+  "private": false,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SanjoyDat1/SunnyD_NoteTaker.git"
+  },
+  "keywords": ["notes", "ai", "openai", "react", "vite"],
+  "author": "",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
