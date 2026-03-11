@@ -20,16 +20,39 @@ async function ai(apiKey, system, user, max = 900) {
 const SEED = [
   {
     id: 1, title: "Research Notes",
-    content: "The Great Wall of China is approximately 500 miles long and was built entirely during the Ming Dynasty.\n\nQuantum entanglement allows particles to instantaneously affect each other regardless of distance, which means information could theoretically travel faster than light.\n\nWhat is the difference between RNA and DNA?\n\nClimate change is primarily driven by human activities, especially the burning of fossil fuels. Rising CO2 levels have increased by about 50% since pre-industrial times.",
+    content: `The Great Wall of China is approximately 500 miles long and was built entirely during the Ming Dynasty.
+
+Quantum entanglement allows particles to instantaneously affect each other regardless of distance. What exactly is quantum entanglement and why does it matter for computing?
+
+Climate change is primarily driven by human activities, especially the burning of fossil fuels. Atmospheric CO2 has increased by about 50% since pre-industrial times, and the last decade was the warmest on record.
+
+The CRISPR-Cas9 system enables precise editing of genetic sequences. How does CRISPR actually work at the molecular level?
+
+Studies suggest that regular meditation can reduce cortisol levels and improve attention span, though the mechanisms are still being unpacked.`,
   },
   {
     id: 2, title: "Ideas",
-    content: "The Industrial Revolution began in Britain around 1760 and was primarily driven by the invention of the steam engine by James Watt.\n\nHow does photosynthesis actually work?\n\nArtificial intelligence could transform education by providing personalized tutoring at scale.",
+    content: `The best product ideas often come from noticing your own frustrations—the things that make you think "why doesn't this just..."
+
+I've been thinking about how we could build a tool that helps people
+
+What if we could turn every meeting into a searchable knowledge base without anyone having to take notes?
+
+The key insight is that most users don't want more features, they want fewer decisions. Simplicity isn't about removing options, it's about removing the cognitive load of choosing between them.
+
+How might we design for the 10% of users who drive 90% of the value?`,
   },
 ];
 
 let _n = 0;
 const uid = () => `a${++_n}_${Date.now()}`;
+
+/* Hex to rgba with opacity */
+const hexToRgba = (hex, a = 1) => {
+  const m = hex.match(/^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i);
+  if (!m) return `rgba(0,0,0,${a})`;
+  return `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${a})`;
+};
 
 /* ─── Categories ─────────────────────────────────────────────────────────── */
 const CATS = {
@@ -37,7 +60,6 @@ const CATS = {
   expand:   { label: "Expand",      color: "#1A6835", bg: "#EDFAF2", border: "#7DD4A0", icon: "✦" },
   clarity:  { label: "Clarity",     color: "#1448AA", bg: "#EEF3FF", border: "#88BCEE", icon: "≋" },
   explain:  { label: "Explain",     color: "#0A6868", bg: "#EDFAFA", border: "#7ECCCC", icon: "◉" },
-  question: { label: "Question",    color: "#5E38A0", bg: "#F5F0FF", border: "#B498E8", icon: "?" },
   research: { label: "Research",    color: "#0A6868", bg: "#EDFAFA", border: "#7ECCCC", icon: "⊞" },
 };
 
@@ -108,79 +130,53 @@ function ThinkDots() {
 /* ─── ThinkingCard (skeleton while AI works) ─────────────────────────────── */
 function ThinkingCard({ delay = 0 }) {
   return (
-    <div className="ann-card ann-thinking" style={{ borderLeftColor: "var(--rule2)", animationDelay: `${delay}ms` }}>
-      <div className="ann-header">
-        <div className="ann-tag" style={{ color: "var(--ink3)" }}>
+    <div className="ann-card ann-thinking" style={{ animationDelay: `${delay}ms` }}>
+      <div className="ann-card-inner">
+        <div className="ann-tag">
           <span className="ann-tag-dot" style={{ background: "var(--rule2)" }} />
           <ThinkDots />
         </div>
-      </div>
-      <div style={{ padding: "4px 14px 14px" }}>
-        <div className="ann-skel" style={{ width: "78%" }} />
-        <div className="ann-skel" style={{ width: "54%", marginTop: 7 }} />
+        <div className="ann-thinking-skel">
+          <div className="ann-skel" style={{ width: "78%" }} />
+          <div className="ann-skel" style={{ width: "54%", marginTop: 7 }} />
+        </div>
       </div>
     </div>
   );
 }
 
-/* Truncate preview to complete words that fit one line (no ellipsis cut-off) */
-function previewOneLine(text) {
-  if (!text || typeof text !== "string") return "";
-  const words = text.trim().split(/\s+/);
-  const maxChars = 32;
-  let out = "";
-  for (const w of words) {
-    if (out.length + (out ? 1 : 0) + w.length <= maxChars) out += (out ? " " : "") + w;
-    else break;
-  }
-  return out || words[0]?.slice(0, maxChars) || "";
-}
-
 /* ─── AnnCard ────────────────────────────────────────────────────────────── */
 function AnnCard({ s, onDismiss, isNew, onHover, onLeave, onCardClick }) {
   const cat = CATS[s.cat] || CATS.expand;
-  const displayPreview = previewOneLine(s.preview);
+  const bgTint = hexToRgba(cat.color, 0.03);
 
   const handleCardClick = e => {
     if (s.applying) return;
-    if (e.target.closest(".ann-dismiss")) return;
     onCardClick?.(s, e);
   };
 
   return (
     <div
       className={`ann-card${isNew ? " ann-enter" : ""}${s.applying ? " applying" : ""}`}
-      style={{ borderLeftColor: cat.color }}
+      style={{ "--cat-color": cat.color, "--cat-tint": bgTint }}
       onMouseEnter={() => onHover?.(s.id)}
       onMouseLeave={() => onLeave?.()}
       onClick={handleCardClick}
     >
-      {/* Header: badge + expand toggle + dismiss */}
-      <div className="ann-header">
-        <div className="ann-tag" style={{ color: cat.color }}>
+      <div className="ann-card-inner">
+        <div className="ann-tag">
           <span className="ann-tag-dot" style={{ background: cat.color }} />
-          <span>{cat.label}</span>
+          <span className="ann-tag-label" style={{ color: cat.color }}>{cat.label}</span>
         </div>
-        <button className="ann-dismiss" onClick={e => { e.stopPropagation(); onDismiss(s.id); }}>×</button>
-      </div>
-
-      {/* Preview: always visible, max 5 words so it never cuts off */}
-      <p className="ann-preview">
-        {isNew ? <TypeWriter text={displayPreview} speed={22} /> : displayPreview}
-      </p>
-
-      {/* ...more — opens floating card with Apply/Decline */}
-      <div className="ann-actions" onClick={e => e.stopPropagation()}>
         {s.applying ? (
           <div className="ann-applying">
             <span className="think-dots"><span /><span /><span /></span>
-            <span>Weaving into notes…</span>
+            <span>Weaving…</span>
           </div>
         ) : (
-          <button className="btn-more" onClick={e => onCardClick?.(s, e)}>…more</button>
+          <span className="ann-chevron">›</span>
         )}
       </div>
-
     </div>
   );
 }
@@ -311,21 +307,72 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 /* ── Annotation column ── */
 .ann-col{width:260px;flex-shrink:0;min-height:0;padding:24px 14px 80px 14px;background:var(--paper);border-left:1px solid rgba(215,205,188,.55);overflow-y:auto;}
 .ann-col-hdr{font-size:7px;font-weight:700;text-transform:uppercase;letter-spacing:.18em;color:var(--ink3);opacity:.4;margin-bottom:10px;padding:0;}
+.ann-col-body{position:relative;width:100%;overflow:visible;}
 .ann-empty{padding:12px 0;font-family:'DM Sans',sans-serif;font-size:11px;color:var(--ink3);line-height:1.5;opacity:.65;}
 
-/* ── Annotation cards (compact one-liner) ── */
+/* ── Annotation cards (pill style) ── */
 .ann-card{
-  background:var(--page);
-  border-left:2px solid var(--rule2);
-  border-radius:0 5px 5px 0;
+  position:relative;
+  height:44px;
+  background:#fff;
+  border:1px solid #E5DDD4;
+  border-radius:8px;
   margin-bottom:6px;
   overflow:hidden;
-  transition:box-shadow .2s,transform .18s;
-  box-shadow:0 1px 3px rgba(50,35,15,.04);
+  transition:box-shadow .15s ease,transform .15s ease,background .15s ease;
+  box-shadow:none;
+  cursor:pointer;
 }
-.ann-card:hover{box-shadow:0 2px 8px rgba(50,35,15,.08);transform:translateX(2px);}
-.ann-card.expanded{box-shadow:0 2px 8px rgba(50,35,15,.08);}
-.ann-thinking{opacity:0;animation:annEnter .5s ease forwards;}
+.ann-card:hover{
+  transform:translateY(-1px);
+  box-shadow:0 3px 10px rgba(0,0,0,.09);
+  background:var(--cat-tint,var(--page));
+}
+.ann-card.expanded{box-shadow:0 3px 10px rgba(0,0,0,.09);}
+.ann-card-inner{
+  display:flex;
+  align-items:center;
+  height:100%;
+  padding:0 14px;
+  gap:0;
+}
+.ann-card-inner .ann-tag{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  flex-shrink:0;
+}
+.ann-card-inner .ann-tag-dot{
+  width:7px;
+  height:7px;
+  border-radius:50%;
+  flex-shrink:0;
+}
+.ann-card-inner .ann-tag-label{
+  font-size:9px;
+  font-weight:700;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+.ann-chevron{
+  font-size:14px;
+  color:#C0B8AE;
+  margin-left:auto;
+  flex-shrink:0;
+  transition:color .15s ease;
+}
+.ann-card:hover .ann-chevron{color:#1A1410;}
+.ann-applying{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  margin-left:auto;
+  font-size:11px;
+  color:var(--ink3);
+}
+.ann-thinking{opacity:0;animation:annEnter .5s ease forwards;height:auto;min-height:44px;}
+.ann-thinking .ann-card-inner{height:auto;padding:12px 14px;align-items:flex-start;}
+.ann-thinking-skel{margin-left:auto;}
 .ann-enter{opacity:0;animation:annEnter .55s cubic-bezier(.22,1,.36,1) forwards;}
 @keyframes annEnter{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:translateX(0)}}
 
@@ -376,9 +423,6 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .ann-tag-dot{width:4px;height:4px;border-radius:50%;flex-shrink:0;opacity:.9;}
 .ann-dismiss{background:none;border:none;color:#C8C0B6;cursor:pointer;font-size:14px;line-height:1;padding:0;transition:color .12s;display:flex;align-items:center;}
 .ann-dismiss:hover{color:var(--red);}
-
-/* Preview — one-liner with ellipsis */
-.ann-preview{padding:3px 10px 6px;font-family:'DM Sans',sans-serif;font-size:11px;color:var(--ink);line-height:1.35;cursor:pointer;user-select:none;font-weight:400;white-space:nowrap;overflow:visible;}
 
 /* Expanded body */
 .ann-detail-wrap{padding:8px 13px 13px;border-top:1px solid rgba(230,222,210,.7);animation:fadeUp .22s ease;}
@@ -455,7 +499,7 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 @keyframes selPreviewIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
 
 /* ── Pop ── */
-.pop{position:fixed;z-index:9998;width:330px;background:var(--page);border-radius:10px;border:1px solid var(--rule2);box-shadow:0 10px 34px rgba(50,35,15,.1);padding:16px 18px;animation:cardRise .18s cubic-bezier(.22,1,.36,1);}
+.pop{position:fixed;z-index:9998;width:330px;max-height:calc(100vh - 48px);overflow-y:auto;background:var(--page);border-radius:10px;border:1px solid var(--rule2);box-shadow:0 10px 34px rgba(50,35,15,.1);padding:16px 18px;animation:cardRise .18s cubic-bezier(.22,1,.36,1);}
 .pop-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;}
 .pop-type{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);}
 .pop-q{font-family:'DM Sans',sans-serif;font-size:13.5px;line-height:1.6;color:var(--ink);font-weight:500;margin-bottom:12px;}
@@ -565,77 +609,16 @@ function FactPop({ ann, onDismiss, onClose, onApply }) {
   );
 }
 
-/* ─── QPop ────────────────────────────────────────────────────────────────── */
-function QPop({ ann, onWeave, onDismiss, onClose, onGetAnswer }) {
-  const [prev, setPrev] = useState(false);
-  const [fetchingAnswer, setFetchingAnswer] = useState(false);
-  const socratic = ann.data?.socraticGuide;
-  const direct = ann.data?.directAnswer;
-
-  const handleGetAnswer = async () => {
-    setFetchingAnswer(true);
-    await onGetAnswer(ann.id, ann.text);
-    setFetchingAnswer(false);
-  };
-
-  return (
-    <>
-      <div className="pop-hd"><span className="pop-type">Question</span><button className="x-btn" onClick={onClose}>×</button></div>
-      <p className="pop-txt">{ann.text}</p>
-      {!socratic && !direct && <div className="ldots"><span /><span /><span /></div>}
-      {socratic && !direct && (
-        <>
-          {!fetchingAnswer ? (
-            <>
-              <div className="pop-socratic">
-                <div className="pop-socratic-lbl">Think it through</div>
-                <div className="pop-ans">{socratic}</div>
-              </div>
-              <div className="pop-btns">
-                <button className="btn-fill" onClick={handleGetAnswer}>Give me the answer</button>
-                <button className="btn-out" onClick={onDismiss}>Dismiss</button>
-              </div>
-            </>
-          ) : (
-            <div className="pop-thinking">
-              <span className="pop-thinking-txt">Thinking</span>
-              <div className="pop-thinking-dots"><span /><span /><span /></div>
-            </div>
-          )}
-        </>
-      )}
-      {direct && !prev && (
-        <div className="pop-direct-wrap" style={{ animation: "fadeSoft .35s ease-out forwards" }}>
-          <div className="pop-ans">{direct}</div>
-          <div className="pop-btns">
-            <button className="btn-fill" onClick={() => setPrev(true)}>Weave into notes</button>
-            <button className="btn-out" onClick={onDismiss}>Dismiss</button>
-          </div>
-        </div>
-      )}
-      {direct && prev && (
-        <><div className="pop-prev"><span className="pop-prev-lbl">Will add after question</span>{direct}</div>
-        <div className="pop-btns">
-          <button className="btn-fill" onClick={onWeave}>✓ Confirm</button>
-          <button className="btn-out" onClick={() => setPrev(false)}>Back</button>
-        </div></>
-      )}
-    </>
-  );
-}
-
 /* ─── Main ───────────────────────────────────────────────────────────────── */
 export default function SunnyDNotes() {
   const [apiKey,      setApiKey]      = useState(() => { try { return sessionStorage.getItem("sd_key") || ""; } catch { return ""; } });
   const [notes,       setNotes]       = useState(SEED);
   const [activeId,    setActiveId]    = useState(1);
-  const [anns,        setAnns]        = useState([]);
   const [suggestions, setSugg]        = useState([]);
   const [shownSuggIds,   setShownSuggIds]   = useState(new Set());
   const [hoveredSuggId,  setHoveredSuggId]  = useState(null);
   const [dockedCard,     setDockedCard]     = useState(null);
   const [panelHidden,    setPanelHidden]    = useState(false);
-  const [pop,            setPop]            = useState(null);
   const [ghost,       setGhost]       = useState(null);
   const [ghostThinking, setGhostThinking] = useState(false);
   const [selMenu,     setSelMenu]     = useState(null);
@@ -650,10 +633,13 @@ export default function SunnyDNotes() {
   const hlRef       = useRef(null);
   const docColRef   = useRef(null);
   const taWrapRef   = useRef(null);
+  const mainAreaRef = useRef(null);
+  const annColRef   = useRef(null);
+  const panelBodyRef = useRef(null);
+  const [suggTops, setSuggTops] = useState({});
   const timers      = useRef({});
-  const dismissed   = useRef({ fact: new Set(), q: new Set() });
+  const dismissed   = useRef({ fact: new Set() });
   const checked     = useRef(new Set());
-  const processedQ  = useRef(new Set());
   const lastScannedContent = useRef({});
   const ghostBusy   = useRef(false);
   const newSuggIds  = useRef(new Set());
@@ -671,8 +657,7 @@ export default function SunnyDNotes() {
   const content    = note.content;
   const setContent = v => setNotes(p => p.map(n => n.id === activeId ? { ...n, content: v } : n));
   const setTitle   = v => setNotes(p => p.map(n => n.id === activeId ? { ...n, title:   v } : n));
-  const activeAnns = anns.filter(a => a.noteId === activeId && content.includes(a.text));
-  const activeSugg = suggestions.filter(s => s.noteId === activeId);
+  const activeSugg = suggestions.filter(s => s.noteId === activeId && (!s.textRef || content.includes(s.textRef)));
   const applyingSugg = suggestions.find(s => s.applying);
 
   /* ── Clear suggestion highlight state when switching notes ── */
@@ -695,26 +680,8 @@ export default function SunnyDNotes() {
     });
   }, [activeSugg.length, activeId]);
 
-  /* ── Positions ── */
-  const getPos = useCallback((text, list) => {
-    const seen = new Set();
-    return list.map(a => {
-      const i = text.indexOf(a.text);
-      if (i === -1 || seen.has(i)) return null;
-      seen.add(i);
-      return { ...a, start: i, end: i + a.text.length };
-    }).filter(Boolean).sort((a, b) => a.start - b.start);
-  }, []);
-
-  /* ── Highlight layer: inline annotations (questions only) + hovered suggestion + ghost ── */
-  const questionAnns = activeAnns.filter(a => a.type === "q");
+  /* ── Highlight layer: hovered suggestion + ghost ── */
   function renderHL() {
-    // Inline highlights: questions only (fact-checks appear as right-panel suggestions, highlighted on hover)
-    const annRanges = getPos(content, questionAnns).map(a => ({
-      id: a.id, start: a.start, end: a.end, kind: "ann",
-      cls: (a.type === "fact" ? "hf" : "hq") + (a.fresh ? " fresh" : ""),
-    }));
-
     // Suggestion highlight on hover or when card is expanded — use fuzzy matching if textRef doesn't match
     const suggToHighlight = hoveredSuggId;
     const hovSugg = suggToHighlight ? activeSugg.find(s => s.id === suggToHighlight) : null;
@@ -739,7 +706,7 @@ export default function SunnyDNotes() {
     const overlaps = (a, b) => a.start < b.end && a.end > b.start;
 
     // Merge and sort all ranges
-    const baseRanges = [...annRanges];
+    const baseRanges = [];
     if (suggRange && (!dockedRange || !overlaps(suggRange, dockedRange))) baseRanges.push(suggRange);
     if (dockedRange) baseRanges.push(dockedRange);
     const ranges = baseRanges.sort((a, b) => a.start - b.start);
@@ -752,10 +719,6 @@ export default function SunnyDNotes() {
     const renderRange = (r) => {
       const addHref = dockedRange && overlaps(r, dockedRange);
       const hrefStyle = dockedRange?.cat ? { background: dockedRange.cat.bg, border: `1px solid ${dockedRange.cat.color}`, borderRadius: "3px" } : {};
-      if (r.kind === "ann") {
-        const cls = r.cls + (addHref ? " href" : "");
-        return <span key={r.id} className={cls} style={{ whiteSpace: "pre-wrap", ...(addHref ? hrefStyle : {}) }}>{content.slice(r.start, r.end)}</span>;
-      }
       if (r.kind === "ref") return <span key="href" className="href" style={{ whiteSpace: "pre-wrap", ...hrefStyle }}>{content.slice(r.start, r.end)}</span>;
       return (
         <span key="shl" className="hs" style={{ whiteSpace: "pre-wrap", background: r.cat.bg, boxShadow: `0 0 0 1.5px ${r.cat.border}`, borderRadius: "2px" }}>
@@ -833,58 +796,68 @@ export default function SunnyDNotes() {
     return out;
   }
 
-  /* ── Click → popover (questions only; fact-checks are in right panel) ── */
-  const handleTaClick = e => {
-    const cursor = taRef.current?.selectionStart ?? 0;
-    const hit = getPos(content, questionAnns).find(a => cursor >= a.start && cursor <= a.end);
-    if (!hit) { setPop(null); return; }
-    const x = Math.min(e.clientX, window.innerWidth - 350);
-    const y = e.clientY + 18;
-    setPop({ id: hit.id, x, y });
-    setAnns(p => p.map(a => a.id === hit.id ? { ...a, fresh: false } : a));
-    if (hit.type === "q" && !hit.data?.answer) fetchQAns(hit.id, hit.text);
-  };
-
-  const fetchQAns = async (id, question) => {
-    try {
-      const guide = await ai(apiKey,
-        `You are SunnyD, a Socratic tutor. Do NOT give the answer. Instead, ask 2–3 guiding questions that lead the learner to discover the answer themselves. Each question should build on the previous. Be concise. Return only the questions, one per line.`,
-        question, 400);
-      setAnns(p => p.map(a => a.id === id ? { ...a, data: { ...a.data, socraticGuide: guide.trim() } } : a));
-    } catch { setPop(null); }
-  };
-
-  const fetchDirectAnswer = async (id, question) => {
-    try {
-      const ans = await ai(apiKey,
-        "You are SunnyD. Answer the question fully and accurately in 2–4 complete sentences. Never truncate.",
-        question, 500);
-      setAnns(p => p.map(a => a.id === id ? { ...a, data: { ...a.data, directAnswer: ans } } : a));
-    } catch { setPop(null); }
-  };
-
   /* ── Fact check: adds to right-panel suggestions only (highlight on hover) ── */
+  function isRejectableFactCheck(original, correction, replacement) {
+    const c = (correction || "").toLowerCase();
+    const r = (replacement || "").toLowerCase();
+    const rejectPhrases = ["consult", "check sources", "reliable sources", "scholarly sources", "may vary", "methodolog", "differing", "verify", "confirm the exact", "often been reported", "often cited", "advisable to", "important to check"];
+    if (rejectPhrases.some(p => c.includes(p) || r.includes(p))) return true;
+    const norm = n => (n || "").replace(/,/g, "");
+    const origNums = [...new Set(((original || "").match(/[\d,]+/g) || []).map(norm))];
+    const replNums = [...new Set(((replacement || "").match(/[\d,]+/g) || []).map(norm))];
+    if (origNums.length > 0 && origNums.every(on => replNums.includes(on))) return true;
+    return false;
+  }
+  function isSimilarToDismissedFact(sentence) {
+    const t = sentence.trim();
+    if (dismissed.current.fact.has(t)) return true;
+    const norm = s => (s || "").toLowerCase().replace(/\s+/g, " ");
+    const nt = norm(t);
+    for (const d of dismissed.current.fact) {
+      const nd = norm(d);
+      if (nt === nd) return true;
+      if (nt.length >= 15 && nd.length >= 15 && (nt.includes(nd.slice(0, 25)) || nd.includes(nt.slice(0, 25)))) return true;
+    }
+    return false;
+  }
   async function runFactCheck(text) {
     if (!suggestionsOn || busy) return;
     const sents = text.match(/[A-Z][^.!?\n]{20,}[.!?]/g) || [];
     for (const s of sents) {
       const t = s.trim();
-      if (dismissed.current.fact.has(t) || checked.current.has(t)) continue;
+      if (dismissed.current.fact.has(t) || checked.current.has(t) || isSimilarToDismissedFact(t)) continue;
       checked.current.add(t);
       setBusy(true); setStatus("Scanning…");
       try {
         const raw = await ai(apiKey,
-          `You are SunnyD fact-checker. Examine the sentence for a verifiable inaccuracy.
+          `You are SunnyD fact-checker. Find ONLY clear, verifiable factual errors.
+
+Return check:true ONLY when the sentence contains a WRONG fact (wrong number, wrong date, wrong claim) that you can correct with a DIFFERENT fact. The replacement MUST change the actual information.
+
+Return check:false when:
+- The sentence is already correct
+- You would only be confirming, rephrasing, qualifying, or adding context/caveats
+- Your "correction" would say the same thing (e.g. "13,170 miles" → "around 13,170 miles" is NOT a correction)
+- You would suggest "consult scholarly sources" or "measurements may vary" — that is NOT a factual correction
+
+NEVER suggest qualifications, caveats, or "consult sources." Only flag when the fact is demonstrably WRONG and you have a DIFFERENT correct fact to substitute.
+
 Reply ONLY with valid JSON, no markdown:
-Inaccurate: {"check":true,"question":"Socratic question?","correction":"Correct info in 1–2 sentences.","replacement":"Corrected version of the original sentence."}
-Accurate or opinion: {"check":false}`,
+Inaccurate (wrong fact): {"check":true,"question":"?","correction":"Correct info.","replacement":"Corrected sentence with DIFFERENT factual content."}
+Accurate or no real change: {"check":false}`,
           `Sentence: "${t}"`, 350);
         const p2 = JSON.parse(raw.replace(/```json|```/g, "").trim());
         if (p2.check) {
+          if (isRejectableFactCheck(t, p2.correction, p2.replacement)) {
+            dismissed.current.fact.add(t);
+            break;
+          }
+          const correction = (p2.correction || "").trim();
+          const preview = correction ? ("Correction: " + correction.slice(0, 45) + (correction.length > 45 ? "…" : "")) : "Inaccuracy detected";
           const sugg = {
             id: uid(), noteId: activeId, cat: "fact",
             headline: "Fact check", textRef: t,
-            preview: (p2.correction || "").slice(0, 60) + (p2.correction?.length > 60 ? "…" : ""),
+            preview,
             detail: p2.correction,
             apply: p2.replacement,
           };
@@ -950,8 +923,8 @@ CRITICAL — NO DUPLICATES: Each suggestion MUST reference a DIFFERENT, NON-OVER
 
 CRITICAL — preview: Exactly 3–6 words. A short teaser shown in the panel. Full detail goes in "detail" (shown when user clicks "...more"). Never exceed 6 words.
 
-Categories (use exact keys) — do NOT suggest "question"; questions are handled inline when detected:
-- "fact": factual claims that need verification or correction
+Categories (use exact keys):
+- "fact": factual claims that need verification or correction. Preview must NOT repeat textRef — use a short correction teaser, e.g. "Correction: ~13,000 miles" not "The Great Wall..."
 - "expand": ideas worth developing further
 - "clarity": sentences that could be clearer or better structured
 - "explain": concepts or terms that deserve a simpler explanation
@@ -984,6 +957,7 @@ Generate at least ${minSugg} suggestions (${wc} words). Add more if the note gen
           let candidates = newSugg.filter(s => {
             const ref = (s.textRef || "").trim();
             if (!ref || !text.includes(ref) || existingRefs.has(ref)) return false;
+            if (s.cat === "fact" && isSimilarToDismissedFact(ref)) return false;
             const r = findSuggestionRange(text, s);
             if (!r) return false;
             if (existingRanges.some(ex => overlaps(r, ex))) return false;
@@ -1009,35 +983,6 @@ Generate at least ${minSugg} suggestions (${wc} words). Add more if the note gen
       console.error("sugg:", e);
       delete lastScannedContent.current[noteId]; // Allow retry on next pause or note switch
     } finally { setBusy(false); setStatus(""); }
-  }
-
-  /* ── Q scan: detect all questions inline (highlighted, click to get answer) ── */
-  function isSimilarToAnswered(candidate) {
-    if (dismissed.current.q.has(candidate)) return true;
-    const norm = s => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
-    const nc = norm(candidate);
-    for (const d of dismissed.current.q) {
-      const nd = norm(d);
-      if (nc === nd) return true;
-      if (nc.length >= 12 && nd.length >= 12 && (nc.includes(nd) || nd.includes(nc))) return true;
-    }
-    return false;
-  }
-  function scanQ(text) {
-    const candidates = [];
-    for (const line of text.split("\n")) {
-      const parts = line.split(/(?<=[?])/);
-      for (const p of parts) {
-        const t = p.trim();
-        if (t.endsWith("?") && t.length > 8 && text.includes(t)) candidates.push(t);
-      }
-    }
-    for (const t of [...new Set(candidates)]) {
-      if (isSimilarToAnswered(t) || processedQ.current.has(t)) continue;
-      processedQ.current.add(t);
-      setTimeout(() => setAnns(p => p.some(a => a.text === t && a.noteId === activeId) ? p
-        : [...p, { id: uid(), noteId: activeId, text: t, type: "q", fresh: true, data: {} }]), 1500);
-    }
   }
 
   /* ── Ghost completion: only when mid-thought, never after a complete sentence ── */
@@ -1075,11 +1020,31 @@ If the fragment could already be a complete sentence (they may have just forgott
   /* ── Input ── */
   const handleChange = e => {
     const v = e.target.value;
-    setContent(v); setGhost(null); setGhostThinking(false); setPop(null); resize();
-    clearTimeout(timers.current.t); clearTimeout(timers.current.f);
-    clearTimeout(timers.current.q); clearTimeout(timers.current.s);
     const cur = e.target.selectionEnd;
-    // Snapshot activeId and notes at call time to avoid stale closures
+    setContent(v); setGhost(null); setGhostThinking(false); resize();
+    clearTimeout(timers.current.t); clearTimeout(timers.current.f);
+    clearTimeout(timers.current.s);
+
+    // Only remove suggestions whose textRef is gone (user deleted/replaced that text)
+    const removedIds = new Set();
+    setSugg(p => {
+      const filtered = p.filter(s => {
+        if (s.noteId !== activeId) return true;
+        if (!s.textRef) return false;
+        if (!v.includes(s.textRef)) { removedIds.add(s.id); return false; }
+        return true;
+      });
+      return filtered;
+    });
+    setShownSuggIds(prev => { const n = new Set(prev); removedIds.forEach(id => n.delete(id)); return n; });
+    if (dockedCard?.suggestion && removedIds.has(dockedCard.suggestion.id)) {
+      setDockedCard(null); setPanelHidden(false);
+    }
+
+    // Only clear checked/dismissed for text no longer in content
+    checked.current = new Set([...checked.current].filter(t => v.includes(t)));
+    dismissed.current.fact = new Set([...dismissed.current.fact].filter(t => v.includes(t)));
+
     const snapId = activeId;
     const snapNotes = notes;
     timers.current.t = setTimeout(() => runGhost(v, cur), 4800);
@@ -1087,7 +1052,6 @@ If the fragment could already be a complete sentence (they may have just forgott
       timers.current.f = setTimeout(() => runFactCheck(v), 5500);
       timers.current.s = setTimeout(() => generateSuggestions(snapId, v, snapNotes), 7000);
     }
-    timers.current.q = setTimeout(() => scanQ(v), 2200);
   };
 
   const handleKeyDown = e => {
@@ -1095,9 +1059,26 @@ If the fragment could already be a complete sentence (they may have just forgott
       e.preventDefault();
       const pos = ghost.pos;
       const accepted = content.slice(0, pos) + ghost.text + content.slice(pos);
+      const newPos = pos + ghost.text.length;
       setContent(accepted);
       setGhost(null);
-      const newPos = pos + ghost.text.length;
+      clearTimeout(timers.current.t); clearTimeout(timers.current.f);
+      clearTimeout(timers.current.s);
+      const removedIds = new Set();
+      setSugg(p => p.filter(s => {
+        if (s.noteId !== activeId) return true;
+        if (!s.textRef) return false;
+        if (!accepted.includes(s.textRef)) { removedIds.add(s.id); return false; }
+        return true;
+      }));
+      setShownSuggIds(prev => { const n = new Set(prev); removedIds.forEach(id => n.delete(id)); return n; });
+      if (dockedCard?.suggestion && removedIds.has(dockedCard.suggestion.id)) { setDockedCard(null); setPanelHidden(false); }
+      checked.current = new Set([...checked.current].filter(t => accepted.includes(t)));
+      dismissed.current.fact = new Set([...dismissed.current.fact].filter(t => accepted.includes(t)));
+      if (suggestionsOn) {
+        timers.current.f = setTimeout(() => runFactCheck(accepted), 5500);
+        timers.current.s = setTimeout(() => generateSuggestions(activeId, accepted, notes), 7000);
+      }
       setTimeout(() => { if (taRef.current) { taRef.current.selectionStart = taRef.current.selectionEnd = newPos; } resize(); }, 0);
     } else if (e.key === "Escape" && ghost) {
       e.preventDefault();
@@ -1180,25 +1161,6 @@ Insertion context: Selection is ${isMidSentence ? "mid-sentence" : isStartOfSent
     finally { busyWithSelAction.current = false; setBusy(false); setStatus(""); }
   };
 
-  /* ── Weave / apply ── */
-  const weaveAnswer = id => {
-    const a = anns.find(x => x.id === id);
-    const ans = a?.data?.directAnswer || a?.data?.answer;
-    if (!ans) return;
-    const idx = content.indexOf(a.text);
-    if (idx === -1) return;
-    dismissed.current.q.add(a.text);
-    setContent(content.slice(0, idx + a.text.length) + "\n\n" + ans + content.slice(idx + a.text.length));
-    setAnns(p => p.filter(x => x.id !== id)); setPop(null); setTimeout(resize, 0);
-  };
-
-  const applyCorrection = ann => {
-    const idx = content.indexOf(ann.text);
-    if (idx === -1) return;
-    setContent(content.slice(0, idx) + ann.data.replacement + content.slice(idx + ann.text.length));
-    setAnns(p => p.filter(x => x.id !== ann.id)); setPop(null); setTimeout(resize, 0);
-  };
-
   const applySuggestion = async s => {
     const currentContent = content; // capture at click-time before async gap
     setSugg(p => p.map(x => x.id === s.id ? { ...x, applying: true } : x));
@@ -1208,6 +1170,7 @@ Insertion context: Selection is ${isMidSentence ? "mid-sentence" : isStartOfSent
       ? JSON.stringify(s.articles)
       : "[]";
 
+    let newContent = null;
     try {
       const weaved = await ai(
         apiKey,
@@ -1232,7 +1195,8 @@ ${currentContent}`,
       );
 
       if (weaved.trim()) {
-        setContent(weaved.trim());
+        newContent = weaved.trim();
+        setContent(newContent);
       }
     } catch {
       // Graceful fallback: simple positional insert
@@ -1240,14 +1204,50 @@ ${currentContent}`,
       if (insertion && s.textRef) {
         const idx = currentContent.indexOf(s.textRef);
         if (idx !== -1) {
-          setContent(currentContent.slice(0, idx + s.textRef.length) + "\n\n" + insertion + currentContent.slice(idx + s.textRef.length));
-          setSugg(p => p.filter(x => x.id !== s.id)); setTimeout(resize, 0); return;
+          newContent = currentContent.slice(0, idx + s.textRef.length) + "\n\n" + insertion + currentContent.slice(idx + s.textRef.length);
+          setContent(newContent);
+          setSugg(p => p.filter(x => x.id !== s.id));
+          lastScannedContent.current[activeId] = "";
+          if (suggestionsOn && newContent) {
+            if (s.cat === "fact" && s.apply) {
+              dismissed.current.fact.add(s.apply.trim());
+              const appliedSents = newContent.match(/[A-Z][^.!?\n]{20,}[.!?]/g) || [];
+              const key = s.apply.trim().slice(0, 35);
+              for (const sent of appliedSents) {
+                if (key.length >= 15 && sent.includes(key.slice(0, 20))) dismissed.current.fact.add(sent.trim());
+              }
+            }
+            clearTimeout(timers.current.f);
+            clearTimeout(timers.current.s);
+            setTimeout(() => runFactCheck(newContent), 1500);
+            setTimeout(() => generateSuggestions(activeId, newContent, notes), 2500);
+          }
+          setTimeout(resize, 0);
+          return;
         }
       }
-      if (insertion) setContent(currentContent + "\n\n" + insertion);
+      if (insertion) {
+        newContent = currentContent + "\n\n" + insertion;
+        setContent(newContent);
+      }
     } finally {
       setSugg(p => p.filter(x => x.id !== s.id));
       setStatus("");
+      if (newContent && suggestionsOn) {
+        lastScannedContent.current[activeId] = "";
+        if (s.cat === "fact" && s.apply) {
+          dismissed.current.fact.add(s.apply.trim());
+          const appliedSents = newContent.match(/[A-Z][^.!?\n]{20,}[.!?]/g) || [];
+          const key = s.apply.trim().slice(0, 35);
+          for (const sent of appliedSents) {
+            if (key.length >= 15 && sent.includes(key.slice(0, 20))) dismissed.current.fact.add(sent.trim());
+          }
+        }
+        clearTimeout(timers.current.f);
+        clearTimeout(timers.current.s);
+        setTimeout(() => runFactCheck(newContent), 1500);
+        setTimeout(() => generateSuggestions(activeId, newContent, notes), 2500);
+      }
       setTimeout(resize, 0);
     }
   };
@@ -1264,13 +1264,12 @@ ${currentContent}`,
     else if (op === "delete") next = content.slice(0, start) + (text || "") + content.slice(end);
     setContent(next);
     setSelRes(null);
+    lastScannedContent.current[activeId] = "";
+    if (suggestionsOn) {
+      setTimeout(() => runFactCheck(next), 1500);
+      setTimeout(() => generateSuggestions(activeId, next, notes), 2500);
+    }
     setTimeout(resize, 0);
-  };
-
-  const dismiss = id => {
-    const a = anns.find(x => x.id === id);
-    if (a) dismissed.current[a.type === "fact" ? "fact" : "q"].add(a.text);
-    setAnns(p => p.filter(x => x.id !== id)); setPop(null);
   };
 
   const dismissSugg = id => {
@@ -1368,17 +1367,26 @@ ${currentContent}`,
     });
   }, [applyingSugg, content]);
 
+  /* ── Remove stale suggestions when content changes (e.g. after applying) ── */
+  useEffect(() => {
+    const stale = suggestions.filter(s => s.noteId === activeId && s.textRef && !content.includes(s.textRef));
+    if (stale.length === 0) return;
+    const staleIds = new Set(stale.map(s => s.id));
+    setSugg(p => p.filter(s => !staleIds.has(s.id)));
+    setShownSuggIds(prev => { const n = new Set(prev); staleIds.forEach(id => n.delete(id)); return n; });
+    if (dockedCard?.suggestion && staleIds.has(dockedCard.suggestion.id)) { setDockedCard(null); setPanelHidden(false); }
+  }, [content, activeId, suggestions, dockedCard]);
+
   /* ── Init on note switch ── */
   useEffect(() => {
     if (!apiKey) return;
-    checked.current = new Set(); processedQ.current = new Set();
-    setGhost(null); setGhostThinking(false); setPop(null); setSelRes(null); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
+    checked.current = new Set();
+    setGhost(null); setGhostThinking(false); setSelRes(null); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
     const snapNotes = notes;
     const t1 = suggestionsOn ? setTimeout(() => runFactCheck(content), 2500) : null;
-    const t2 = setTimeout(() => scanQ(content), 1800);
     const t3 = suggestionsOn ? setTimeout(() => generateSuggestions(activeId, content, snapNotes), 5000) : null;
     setTimeout(resize, 50);
-    return () => { if (t1) clearTimeout(t1); clearTimeout(t2); if (t3) clearTimeout(t3); };
+    return () => { if (t1) clearTimeout(t1); if (t3) clearTimeout(t3); };
   }, [activeId, apiKey, suggestionsOn]);
 
   /* ── Sorted shown suggestions by text position ── */
@@ -1389,10 +1397,97 @@ ${currentContent}`,
     const pb = b.textRef ? content.indexOf(b.textRef) : Infinity;
     return pa - pb;
   });
+
+  const SUGG_CARD_H = 44;
+  const SUGG_GAP = 8;
+  const MIN_SPACING = SUGG_CARD_H + SUGG_GAP;
+
+  const sortedSuggRef = useRef(sortedSugg);
+  const contentRef = useRef(content);
+  sortedSuggRef.current = sortedSugg;
+  contentRef.current = content;
+
+  const recalcSuggTops = useCallback(() => {
+    try {
+      const sugg = sortedSuggRef.current;
+      const txt = contentRef.current;
+      const hl = hlRef.current;
+      const panel = panelBodyRef.current;
+      if (!hl || !panel || sugg.length === 0) {
+        setSuggTops(prev => (Object.keys(prev).length === 0 ? prev : {}));
+        return;
+      }
+      const panelRect = panel.getBoundingClientRect();
+      const positions = {};
+      for (const s of sugg) {
+        const range = findSuggestionRange(txt, s);
+        if (!range) continue;
+        const refIndex = range.start;
+        const walker = document.createTreeWalker(hl, NodeFilter.SHOW_TEXT);
+        let node, charOffset = 0;
+        let found = false;
+        while ((node = walker.nextNode())) {
+          const len = node.textContent.length;
+          if (charOffset + len > refIndex) {
+            const offsetInNode = Math.max(0, Math.min(refIndex - charOffset, len - 1));
+            const r = document.createRange();
+            r.setStart(node, offsetInNode);
+            r.setEnd(node, Math.min(offsetInNode + 1, len));
+            const rect = r.getBoundingClientRect();
+            positions[s.id] = rect.top - panelRect.top;
+            found = true;
+            break;
+          }
+          charOffset += len;
+        }
+        if (!found) positions[s.id] = null;
+      }
+      const sorted = [...sugg].sort((a, b) => (positions[a.id] ?? 9999) - (positions[b.id] ?? 9999));
+      for (let i = 1; i < sorted.length; i++) {
+        const prev = sorted[i - 1];
+        const curr = sorted[i];
+        const prevTop = positions[prev.id];
+        const currTop = positions[curr.id];
+        if (prevTop != null && currTop != null && currTop < prevTop + MIN_SPACING) {
+          positions[curr.id] = prevTop + MIN_SPACING;
+        }
+      }
+      setSuggTops(prev => {
+        const keys = Object.keys(positions);
+        if (keys.length !== Object.keys(prev).length) return positions;
+        if (keys.some(k => prev[k] !== positions[k])) return positions;
+        return prev;
+      });
+    } catch (e) {
+      console.warn("recalcSuggTops:", e);
+      setSuggTops(prev => (Object.keys(prev).length === 0 ? prev : {}));
+    }
+  }, []);
+
+  const sortedSuggKey = sortedSugg.map(s => s.id).sort().join(",");
+  useLayoutEffect(() => {
+    recalcSuggTops();
+  }, [content, sortedSuggKey, recalcSuggTops]);
+
+  useEffect(() => {
+    const main = mainAreaRef.current;
+    const ta = taRef.current;
+    const ann = annColRef.current;
+    if (!main && !ta && !ann) return;
+    const onScroll = () => requestAnimationFrame(recalcSuggTops);
+    main?.addEventListener("scroll", onScroll, { passive: true });
+    ta?.addEventListener("scroll", onScroll, { passive: true });
+    ann?.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      main?.removeEventListener("scroll", onScroll);
+      ta?.removeEventListener("scroll", onScroll);
+      ann?.removeEventListener("scroll", onScroll);
+    };
+  }, [recalcSuggTops]);
+
   // Skeletons only show while AI is generating suggestions — NOT when user runs selection actions (expand/summarize/explain)
   const showThinking = busy && activeSugg.length === 0 && !busyWithSelAction.current;
 
-  const popAnn = pop ? anns.find(a => a.id === pop.id) : null;
   const wc = (content.match(/\S+/g) || []).length;
 
   const SEL_ACTS = [
@@ -1451,7 +1546,7 @@ ${currentContent}`,
             }}>+ New Note</button>
             {notes.map(n => (
               <div key={n.id} className={`note-row${n.id === activeId ? " on" : ""}`}
-                onClick={() => { setActiveId(n.id); setPop(null); setGhost(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); }}>
+                onClick={() => { setActiveId(n.id); setGhost(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); }}>
                 <div className="nr-pip" />
                 <span className="nr-lbl">{n.title || "Untitled"}</span>
               </div>
@@ -1460,7 +1555,6 @@ ${currentContent}`,
               <div className="sb-ttl">How it works</div>
               {[
                 ["Fact checks",  "Right panel — hover to highlight"],
-                ["Questions",    "Blue highlight — click"],
                 ["Completion",   "Tab to accept"],
                 ["Selection",    "Highlight text to transform"],
               ].map(([h, d]) => (
@@ -1470,7 +1564,7 @@ ${currentContent}`,
           </aside>
 
           {/* Main area: editor + annotation column scroll together */}
-          <div className="main-area" onMouseUp={handleMouseUp} onClick={e => e.stopPropagation()}>
+          <div ref={mainAreaRef} className="main-area" onMouseUp={handleMouseUp} onClick={e => e.stopPropagation()}>
             <div className="main-inner">
 
               {/* Document column — click to close docked card */}
@@ -1479,7 +1573,6 @@ ${currentContent}`,
                 <input className="title-inp" value={note.title} onChange={e => setTitle(e.target.value)} placeholder="Untitled" />
                 <div className="meta-row">
                   <span>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</span>
-                  {activeAnns.length > 0 && <span className="ann-badge">{activeAnns.length} inline</span>}
                   {activeSugg.length > 0 && <span className="ann-badge">{activeSugg.length} suggestions</span>}
                 </div>
                 <div className="divider" />
@@ -1488,7 +1581,7 @@ ${currentContent}`,
                   <textarea ref={taRef} className="ta" value={content}
                     readOnly={!!applyingSugg || !!selRes}
                     onChange={handleChange} onKeyDown={handleKeyDown}
-                    onScroll={syncScroll} onClick={handleTaClick}
+                    onScroll={syncScroll}
                     placeholder="Start writing — SunnyD will assist as you go." />
                   {applyingSugg && weaveRect && (
                     <div
@@ -1523,7 +1616,7 @@ ${currentContent}`,
               </div>
 
               {/* Annotation column — slides off when card is docked */}
-              <div className={`ann-col sugg-panel${panelHidden ? " hidden" : ""}`}>
+              <div ref={annColRef} className={`ann-col sugg-panel${panelHidden ? " hidden" : ""}`}>
                 <div className="ann-col-hdr">
                   {activeSugg.length > 0
                     ? `${shownSugg.length} suggestion${shownSugg.length !== 1 ? "s" : ""}`
@@ -1538,17 +1631,33 @@ ${currentContent}`,
                   </>
                 )}
 
-                {sortedSugg.map(s => (
-                  <AnnCard
-                    key={s.id}
-                    s={s}
-                    onDismiss={dismissSugg}
-                    isNew={newSuggIds.current.has(s.id)}
-                    onHover={id => setHoveredSuggId(id)}
-                    onLeave={() => setHoveredSuggId(null)}
-                    onCardClick={handleCardClick}
-                  />
-                ))}
+                <div
+                  ref={panelBodyRef}
+                  className="ann-col-body"
+                  style={{ minHeight: sortedSugg.length > 0 ? sortedSugg.length * MIN_SPACING + 100 : 0 }}
+                >
+                  {sortedSugg.map((s, index) => (
+                    <div
+                      key={s.id}
+                      style={{
+                        position: "absolute",
+                        top: suggTops[s.id] ?? index * MIN_SPACING,
+                        left: 8,
+                        width: "calc(100% - 16px)",
+                        transition: "top 0.25s cubic-bezier(.22,1,.36,1)",
+                      }}
+                    >
+                      <AnnCard
+                        s={s}
+                        onDismiss={dismissSugg}
+                        isNew={newSuggIds.current.has(s.id)}
+                        onHover={id => setHoveredSuggId(id)}
+                        onLeave={() => setHoveredSuggId(null)}
+                        onCardClick={handleCardClick}
+                      />
+                    </div>
+                  ))}
+                </div>
 
                 {activeSugg.length === 0 && !busy && (
                   <p className="ann-empty">
@@ -1575,12 +1684,6 @@ ${currentContent}`,
         )}
 
         {/* Annotation popover — questions only (fact-checks are in right panel) */}
-        {pop && popAnn && popAnn.type === "q" && (
-          <div className="pop" style={{ left: pop.x, top: pop.y }} onClick={e => e.stopPropagation()}>
-            <QPop ann={popAnn} onWeave={() => weaveAnswer(popAnn.id)} onDismiss={() => dismiss(popAnn.id)} onClose={() => setPop(null)} onGetAnswer={fetchDirectAnswer} />
-          </div>
-        )}
-
         {/* Floating docked card */}
         {dockedCard?.suggestion && (
           <div
