@@ -15,6 +15,7 @@ An intelligent note-taking app powered by AI. SunnyD reads your notes as you wri
 - **Research** — Suggests citations with real URLs (DOI, PubMed, journals)
 - **Ghost completion** — Tab to accept AI-suggested completions when you pause mid-thought
 - **Selection actions** — Highlight text to Summarize, Expand, or Explain
+- **Lecture mode** — Live transcription of lectures; view full transcript and add to notes
 - **Multi-note** — Switch between notes; suggestions stay when you type in unrelated sections
 
 ## Quick Start
@@ -60,7 +61,7 @@ SunnyD_NoteTaker/
 ## How It Works
 
 1. **API key** — Stored in `sessionStorage`; never sent anywhere except OpenAI.
-2. **Suggestions** — Generated as you write; frequency controlled by "Suggestions" bar (Off, Deep Zen, Just Right, Eager Beaver).
+2. **Suggestions** — Generated as you write; frequency controlled by "Suggestions" bar (Off, Zen, Just Right, Eager).
 3. **Fact checks** — Only real factual errors are flagged; caveats and "consult sources" are filtered out.
 4. **Apply** — Click a suggestion card to expand, then Apply to weave it into your notes.
 
@@ -69,13 +70,14 @@ SunnyD_NoteTaker/
 | Setting        | Storage           | Description                          |
 |----------------|-------------------|--------------------------------------|
 | API key        | `sessionStorage`  | OpenAI API key                       |
-| Suggestion freq| `sessionStorage`  | Off / Deep Zen / Just Right / Eager  |
+| Suggestion freq| `sessionStorage`  | Off / Zen / Just Right / Eager  |
 
 ## Tech Stack
 
 - **React 18** — UI
 - **Vite 5** — Build & dev server
 - **OpenAI GPT-4o-mini** — Suggestions, fact checks, completions
+- **react-speech-recognition** — Live lecture transcription ([GitHub](https://github.com/JamesBrill/react-speech-recognition))
 
 ## License
 

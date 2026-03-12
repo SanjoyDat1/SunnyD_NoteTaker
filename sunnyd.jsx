@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
 
 /* ─── OpenAI ─────────────────────────────────────────────────────────────── */
 async function ai(apiKey, system, user, max = 900) {
@@ -237,9 +238,30 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .sugg-freq-btn:hover{border-color:var(--rule2);color:var(--ink);}
 .sugg-freq-btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink);}
 .hdr-r{display:flex;align-items:center;gap:10px;}
+.hdr-sep{width:1px;height:14px;background:var(--rule2);opacity:.6;}
 .hdr-wc{font-size:11px;color:var(--ink3);opacity:.6;}
 .btn-link{font-size:11px;color:var(--ink3);background:none;border:none;cursor:pointer;padding:3px 7px;border-radius:4px;transition:background .15s;}
 .btn-link:hover{background:var(--paper);color:var(--ink2);}
+
+/* ── Lecture toggle & transcript ── */
+.lecture-btn{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:6px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .2s;}
+.lecture-btn:hover{border-color:var(--rule2);color:var(--ink);background:var(--paper);}
+.lecture-btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink);}
+.lecture-btn.on:hover{opacity:.9;}
+.lecture-btn-ic{font-size:8px;opacity:.9;}
+.lecture-btn.on .lecture-btn-ic{color:#7DD4A0;}
+.lecture-panel{background:linear-gradient(180deg,var(--paper) 0%,#F5F0E8 100%);border-bottom:1px solid var(--rule);padding:12px 18px;animation:lectureSlideIn .3s cubic-bezier(.22,1,.36,1);}
+@keyframes lectureSlideIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.lecture-panel-hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;flex-wrap:wrap;}
+.lecture-panel-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--ink3);}
+.lecture-panel-actions{display:flex;gap:6px;}
+.lecture-panel-btn{padding:4px 10px;border-radius:5px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:10px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .15s;}
+.lecture-panel-btn:hover{background:var(--paper);border-color:var(--rule2);color:var(--ink);}
+.lecture-transcript{max-height:48px;overflow:hidden;transition:max-height .3s cubic-bezier(.22,1,.36,1);}
+.lecture-transcript.expanded{max-height:280px;overflow-y:auto;}
+.lecture-text{font-family:'DM Sans',sans-serif;font-size:14px;line-height:1.65;color:var(--ink);margin:0;white-space:pre-wrap;word-break:break-word;}
+.lecture-interim{color:var(--ink3);opacity:.85;}
+.lecture-placeholder{font-size:13px;color:var(--ink3);font-style:italic;margin:0;}
 
 /* ── Layout ── */
 .layout{display:flex;flex:1;overflow:hidden;}
@@ -633,6 +655,10 @@ export default function SunnyDNotes() {
   const [copied,      setCopied]      = useState(false);
   const [weaveRect,   setWeaveRect]   = useState(null);
   const [suggFreq,    setSuggFreq]    = useState(() => { try { return sessionStorage.getItem("sd_suggFreq") || "balanced"; } catch { return "balanced"; } });
+  const [lectureOn,   setLectureOn]   = useState(false);
+  const [showFullTranscript, setShowFullTranscript] = useState(false);
+
+  const { transcript, interimTranscript, finalTranscript, listening, resetTranscript, browserSupportsSpeechRecognition } = useSpeechRecognition({ clearTranscriptOnListen: false });
 
   const taRef       = useRef(null);
   const hlRef       = useRef(null);
@@ -649,6 +675,7 @@ export default function SunnyDNotes() {
   const ghostBusy   = useRef(false);
   const newSuggIds  = useRef(new Set());
   const busyWithSelAction = useRef(false);
+  const transcriptEndRef = useRef(null);
 
   const saveKey  = k => { try { sessionStorage.setItem("sd_key", k); } catch {} setApiKey(k); };
   const resetKey = () => { try { sessionStorage.removeItem("sd_key"); } catch {} setApiKey(""); };
@@ -664,6 +691,23 @@ export default function SunnyDNotes() {
   const setTitle   = v => setNotes(p => p.map(n => n.id === activeId ? { ...n, title:   v } : n));
   const activeSugg = suggestions.filter(s => s.noteId === activeId && (!s.textRef || content.includes(s.textRef)));
   const applyingSugg = suggestions.find(s => s.applying);
+
+  /* ── Lecture mode: start/stop speech recognition ── */
+  useEffect(() => {
+    if (!browserSupportsSpeechRecognition) return;
+    if (lectureOn) {
+      SpeechRecognition.startListening({ continuous: true });
+    } else {
+      SpeechRecognition.stopListening();
+      setShowFullTranscript(false);
+    }
+    return () => { if (lectureOn) SpeechRecognition.stopListening(); };
+  }, [lectureOn, browserSupportsSpeechRecognition]);
+
+  /* ── Auto-scroll transcript to bottom when new content ── */
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [transcript]);
 
   /* ── Clear suggestion highlight state when switching notes ── */
   useEffect(() => {
@@ -1553,18 +1597,54 @@ ${currentContent}`,
             <span>{busy ? statusTxt : "Ready"}</span>
           </div>
           <div className="hdr-r">
+            {browserSupportsSpeechRecognition && (
+              <>
+                <button
+                  className={`lecture-btn${lectureOn ? " on" : ""}`}
+                  onClick={() => setLectureOn(p => !p)}
+                  title={lectureOn ? "Stop live transcription" : "Start live transcription"}
+                >
+                  <span className="lecture-btn-ic">{lectureOn && listening ? "●" : "◉"}</span>
+                  <span>Lecture</span>
+                </button>
+                <span className="hdr-sep" />
+              </>
+            )}
             <span className="hdr-wc">{wc} words</span>
             <button className="btn-link" onClick={resetKey}>Change key</button>
           </div>
         </header>
 
+        {lectureOn && (
+          <div className="lecture-panel">
+            <div className="lecture-panel-hdr">
+              <span className="lecture-panel-lbl">
+                {listening ? "Live transcription" : "Paused — click Lecture to resume"}
+              </span>
+              <div className="lecture-panel-actions">
+                <button className="lecture-panel-btn" onClick={() => setShowFullTranscript(p => !p)}>
+                  {showFullTranscript ? "Hide full transcript" : "View full transcript"}
+                </button>
+                <button className="lecture-panel-btn" onClick={resetTranscript}>Clear</button>
+              </div>
+            </div>
+            <div className={`lecture-transcript${showFullTranscript ? " expanded" : ""}`}>
+              {transcript ? (
+                <p className="lecture-text">{finalTranscript}{interimTranscript && <span className="lecture-interim">{interimTranscript}</span>}<span ref={transcriptEndRef} /></p>
+              ) : (
+                <p className="lecture-placeholder">Speak to see transcription…</p>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="sugg-freq-bar">
           <span className="sugg-freq-lbl">Suggestions:</span>
           {[
             { key: "off", label: "Off", desc: "No suggestions" },
-            { key: "zen", label: "Deep Zen", desc: "At least ~1 per 85 words" },
+            { key: "zen", label: "Zen", desc: "At least ~1 per 85 words" },
             { key: "balanced", label: "Just Right", desc: "At least ~1 per 45 words" },
-            { key: "eager", label: "Eager Beaver", desc: "At least ~1 per 22 words" },
+            { key: "eager", label: "Eager", desc: "At least ~1 per 22 words" },
           ].map(({ key, label, desc }) => (
             <button key={key} className={`sugg-freq-btn${suggFreq === key ? " on" : ""}`} onClick={() => setSuggFreqAndSave(key)} title={desc}>
               {label}
