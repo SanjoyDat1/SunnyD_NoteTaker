@@ -329,11 +329,29 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .lecture-panel-actions{display:flex;gap:6px;}
 .lecture-panel-btn{padding:4px 10px;border-radius:5px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:10px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .15s;}
 .lecture-panel-btn:hover{background:var(--paper);border-color:var(--rule2);color:var(--ink);}
-.lecture-transcript{max-height:48px;overflow:hidden;transition:max-height .3s cubic-bezier(.22,1,.36,1);}
-.lecture-transcript.expanded{max-height:280px;overflow-y:auto;}
-.lecture-text{font-family:'DM Sans',sans-serif;font-size:14px;line-height:1.65;color:var(--ink);margin:0;white-space:pre-wrap;word-break:break-word;}
-.lecture-interim{color:var(--ink3);opacity:.85;}
+.lecture-transcript{max-height:52px;overflow:hidden;transition:max-height .3s cubic-bezier(.22,1,.36,1);}
+.lecture-transcript.expanded{max-height:300px;overflow-y:auto;}
+.lecture-text{font-family:'DM Sans',sans-serif;font-size:14px;line-height:1.7;color:var(--ink);margin:0;word-break:break-word;}
+.lecture-interim{color:var(--ink3);opacity:.8;}
 .lecture-placeholder{font-size:13px;color:var(--ink3);font-style:italic;margin:0;}
+.lecture-q-count{font-size:10px;font-weight:600;color:#5E38A0;margin-top:7px;letter-spacing:.01em;}
+
+/* ── Lecture question highlights ── */
+.lecture-q-hl{background:rgba(94,56,160,.1);border-bottom:2px solid rgba(94,56,160,.4);border-radius:2px 2px 0 0;cursor:pointer;padding:1px 0;transition:background .15s,border-color .15s;position:relative;}
+.lecture-q-hl:hover{background:rgba(94,56,160,.2);border-bottom-color:rgba(94,56,160,.7);}
+.lecture-q-hl.answered{background:rgba(26,104,53,.1);border-bottom-color:rgba(26,104,53,.45);}
+.lecture-q-hl.answered:hover{background:rgba(26,104,53,.18);}
+.lecture-q-pip{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:#5E38A0;color:#fff;font-size:8px;font-weight:700;margin-left:3px;vertical-align:middle;line-height:1;transition:background .15s;}
+.lecture-q-hl.answered .lecture-q-pip{background:var(--green);}
+
+/* ── Lecture question answer card ── */
+.lecture-q-card{position:fixed;z-index:10000;width:340px;background:var(--page);border:1px solid var(--rule2);border-radius:12px;box-shadow:0 12px 40px rgba(50,35,15,.15),0 4px 12px rgba(50,35,15,.07);overflow:hidden;animation:cardRise .2s cubic-bezier(.22,1,.36,1);}
+.lecture-q-card-hdr{padding:11px 16px;background:linear-gradient(180deg,var(--paper) 0%,rgba(248,244,237,.7) 100%);border-bottom:1px solid var(--rule);display:flex;align-items:center;justify-content:space-between;}
+.lecture-q-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#5E38A0;}
+.lecture-q-question{font-family:'DM Sans',sans-serif;font-size:13px;color:var(--ink);font-weight:500;padding:14px 16px 0;line-height:1.55;font-style:italic;}
+.lecture-q-answer{font-family:'DM Sans',sans-serif;font-size:13.5px;line-height:1.72;color:var(--ink2);padding:10px 16px 16px;font-weight:400;}
+.lecture-q-loading{display:flex;align-items:center;gap:8px;padding:16px;color:var(--ink3);font-size:12px;font-weight:500;}
+.lecture-q-btns{padding:11px 16px;background:var(--paper);border-top:1px solid var(--rule);display:flex;gap:8px;align-items:center;}
 
 /* ── Layout ── */
 .layout{display:flex;flex:1;overflow:hidden;}
@@ -754,6 +772,8 @@ export default function SunnyDNotes() {
   const [suggFreq,    setSuggFreq]    = useState(() => { try { return sessionStorage.getItem("sd_suggFreq") || "balanced"; } catch { return "balanced"; } });
   const [lectureOn,   setLectureOn]   = useState(false);
   const [showFullTranscript, setShowFullTranscript] = useState(false);
+  const [lectureQs,   setLectureQs]   = useState([]); // detected questions in transcript
+  const [activeLectureQ, setActiveLectureQ] = useState(null); // { q, x, y }
 
   const { transcript, interimTranscript, finalTranscript, listening, resetTranscript, browserSupportsSpeechRecognition } = useSpeechRecognition({ clearTranscriptOnListen: false });
 
@@ -772,7 +792,9 @@ export default function SunnyDNotes() {
   const ghostBusy   = useRef(false);
   const newSuggIds  = useRef(new Set());
   const busyWithSelAction = useRef(false);
-  const transcriptEndRef = useRef(null);
+  const transcriptEndRef  = useRef(null);
+  const scannedTranscriptRef = useRef(""); // how far into finalTranscript we've scanned
+  const lectureQTimerRef  = useRef(null);
 
   const saveKeys = (provider, key) => {
     try {
@@ -816,10 +838,14 @@ export default function SunnyDNotes() {
   useEffect(() => {
     if (!browserSupportsSpeechRecognition) return;
     if (lectureOn) {
-      SpeechRecognition.startListening({ continuous: true });
+      // lang: en-US gives Chrome's cloud STT the best accuracy hint
+      SpeechRecognition.startListening({ continuous: true, language: "en-US" });
     } else {
       SpeechRecognition.stopListening();
       setShowFullTranscript(false);
+      setLectureQs([]);
+      setActiveLectureQ(null);
+      scannedTranscriptRef.current = "";
     }
     return () => { if (lectureOn) SpeechRecognition.stopListening(); };
   }, [lectureOn, browserSupportsSpeechRecognition]);
@@ -828,6 +854,99 @@ export default function SunnyDNotes() {
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [transcript]);
+
+  /* ── Question detection: scan new finalTranscript text after a short pause ── */
+  useEffect(() => {
+    if (!lectureOn || !finalTranscript) return;
+    const newText = finalTranscript.slice(scannedTranscriptRef.current.length);
+    if (newText.trim().length < 12) return;
+    clearTimeout(lectureQTimerRef.current);
+    lectureQTimerRef.current = setTimeout(() => detectLectureQuestions(finalTranscript), 2200);
+  }, [finalTranscript, lectureOn]);
+
+  async function detectLectureQuestions(currentTranscript) {
+    const newText = currentTranscript.slice(scannedTranscriptRef.current.length).trim();
+    if (!newText || newText.length < 12) return;
+
+    // Quick client-side guard — only call LLM if question markers are present
+    const qMarker = /\?|(^|\s)(what|how|why|when|where|who|could|can|would|should|is are|was|were|do|does|did|will|tell me|explain|describe)\b/i;
+    if (!qMarker.test(newText)) {
+      scannedTranscriptRef.current = currentTranscript;
+      return;
+    }
+
+    scannedTranscriptRef.current = currentTranscript; // mark as scanned
+
+    const noteContext = notes.map(n => `[${n.title}]:\n${n.content.slice(0, 400)}`).join("\n\n");
+    let raw;
+    try {
+      raw = await ai(
+        llmProvider, apiKey,
+        `You analyze live lecture transcripts to detect genuine spoken questions and generate helpful responses.
+Return ONLY valid JSON, no markdown.
+Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sentences the student could say to contribute, grounded in their notes"}]}
+If no clear questions exist, return {"questions":[]}`,
+        `New transcript segment: "${newText}"
+
+Student's notes for context:
+${noteContext.slice(0, 1200)}`,
+        500
+      );
+    } catch { return; }
+
+    let parsed;
+    try {
+      const m = raw.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
+      parsed = m ? JSON.parse(m[0]) : null;
+    } catch { return; }
+
+    if (!parsed?.questions?.length) return;
+
+    setLectureQs(prev => {
+      const existing = new Set(prev.map(q => q.text.trim().toLowerCase()));
+      const fresh = parsed.questions
+        .filter(q => q.text && currentTranscript.includes(q.text))
+        .filter(q => !existing.has(q.text.trim().toLowerCase()))
+        .map(q => ({ id: uid(), text: q.text.trim(), answer: q.answer?.trim() || "" }));
+      return fresh.length > 0 ? [...prev, ...fresh] : prev;
+    });
+  }
+
+  /* ── Render finalTranscript with detected questions highlighted ── */
+  function renderTranscriptText(text) {
+    if (!text) return null;
+    const visible = lectureQs.filter(q => text.includes(q.text));
+    if (visible.length === 0) return text;
+
+    const positioned = visible
+      .map(q => ({ ...q, idx: text.indexOf(q.text) }))
+      .filter(q => q.idx !== -1)
+      .sort((a, b) => a.idx - b.idx);
+
+    const parts = [];
+    let pos = 0;
+    for (const q of positioned) {
+      if (q.idx < pos) continue;
+      if (q.idx > pos) parts.push(<span key={`t-${pos}`}>{text.slice(pos, q.idx)}</span>);
+      parts.push(
+        <span
+          key={q.id}
+          className={`lecture-q-hl${q.answer ? " answered" : ""}`}
+          title="Click for a suggested response"
+          onClick={e => {
+            e.stopPropagation();
+            setActiveLectureQ(prev => prev?.q.id === q.id ? null : { q, x: e.clientX, y: e.clientY });
+          }}
+        >
+          {q.text}
+          <span className="lecture-q-pip">?</span>
+        </span>
+      );
+      pos = q.idx + q.text.length;
+    }
+    if (pos < text.length) parts.push(<span key={`t-end`}>{text.slice(pos)}</span>);
+    return parts;
+  }
 
   /* ── Clear suggestion highlight state when switching notes ── */
   useEffect(() => {
@@ -1749,16 +1868,71 @@ ${currentContent}`,
                 <button className="lecture-panel-btn" onClick={() => setShowFullTranscript(p => !p)}>
                   {showFullTranscript ? "Hide full transcript" : "View full transcript"}
                 </button>
-                <button className="lecture-panel-btn" onClick={resetTranscript}>Clear</button>
+                <button className="lecture-panel-btn" onClick={() => {
+                  resetTranscript();
+                  setLectureQs([]);
+                  setActiveLectureQ(null);
+                  scannedTranscriptRef.current = "";
+                }}>Clear</button>
               </div>
             </div>
             <div className={`lecture-transcript${showFullTranscript ? " expanded" : ""}`}>
               {transcript ? (
-                <p className="lecture-text">{finalTranscript}{interimTranscript && <span className="lecture-interim">{interimTranscript}</span>}<span ref={transcriptEndRef} /></p>
+                <p className="lecture-text">
+                  {renderTranscriptText(finalTranscript)}
+                  {interimTranscript && <span className="lecture-interim"> {interimTranscript}</span>}
+                  <span ref={transcriptEndRef} />
+                </p>
               ) : (
-                <p className="lecture-placeholder">Speak to see transcription…</p>
+                <p className="lecture-placeholder">Speak to see transcription… Detected questions will be highlighted.</p>
               )}
             </div>
+            {lectureQs.length > 0 && (
+              <div className="lecture-q-count">
+                {lectureQs.length} question{lectureQs.length > 1 ? "s" : ""} detected — click to see suggested responses
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Lecture question answer card */}
+        {activeLectureQ && (
+          <div
+            className="lecture-q-card"
+            style={{
+              top: Math.min(activeLectureQ.y + 12, window.innerHeight - 280),
+              left: Math.min(Math.max(activeLectureQ.x - 160, 12), window.innerWidth - 370),
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="lecture-q-card-hdr">
+              <span className="lecture-q-badge">Suggested response</span>
+              <button className="x-btn" onClick={() => setActiveLectureQ(null)}>×</button>
+            </div>
+            <div className="lecture-q-question">"{activeLectureQ.q.text}"</div>
+            {activeLectureQ.q.answer ? (
+              <>
+                <div className="lecture-q-answer">{activeLectureQ.q.answer}</div>
+                <div className="lecture-q-btns">
+                  <button className="btn-apply" style={{ fontSize: 11, padding: "7px 16px" }}
+                    onClick={() => {
+                      setContent(c => (c ? c + "\n\n" : "") + `Q: ${activeLectureQ.q.text}\n${activeLectureQ.q.answer}`);
+                      setActiveLectureQ(null);
+                    }}>
+                    Add to notes
+                  </button>
+                  <button className="btn-decline" style={{ fontSize: 11, padding: "7px 14px" }}
+                    onClick={() => setActiveLectureQ(null)}>
+                    Dismiss
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="lecture-q-loading">
+                <ThinkDots />
+                <span>Generating response…</span>
+              </div>
+            )}
           </div>
         )}
 
