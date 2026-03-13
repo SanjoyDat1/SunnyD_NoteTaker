@@ -352,6 +352,8 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .lecture-q-answer{font-family:'DM Sans',sans-serif;font-size:13.5px;line-height:1.72;color:var(--ink2);padding:10px 16px 16px;font-weight:400;}
 .lecture-q-loading{display:flex;align-items:center;gap:8px;padding:16px;color:var(--ink3);font-size:12px;font-weight:500;}
 .lecture-q-btns{padding:11px 16px;background:var(--paper);border-top:1px solid var(--rule);display:flex;gap:8px;align-items:center;}
+.lecture-q-refresh-btn{margin-left:auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--rule2);background:var(--page);color:var(--ink3);font-size:15px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,border-color .15s,transform .2s;line-height:1;}
+.lecture-q-refresh-btn:hover{background:var(--paper);border-color:var(--ink3);color:var(--ink);transform:rotate(45deg);}
 
 /* ── Layout ── */
 .layout{display:flex;flex:1;overflow:hidden;}
@@ -774,6 +776,8 @@ export default function SunnyDNotes() {
   const [showFullTranscript, setShowFullTranscript] = useState(false);
   const [lectureQs,   setLectureQs]   = useState([]); // detected questions in transcript
   const [activeLectureQ, setActiveLectureQ] = useState(null); // { q, x, y }
+  const [lectureQCopied, setLectureQCopied] = useState(false);
+  const [lectureQRefreshing, setLectureQRefreshing] = useState(false);
 
   const { transcript, interimTranscript, finalTranscript, listening, resetTranscript, browserSupportsSpeechRecognition } = useSpeechRecognition({ clearTranscriptOnListen: false });
 
@@ -824,7 +828,16 @@ export default function SunnyDNotes() {
   const setSuggFreqAndSave = v => {
     setSuggFreq(v);
     try { sessionStorage.setItem("sd_suggFreq", v); } catch {}
-    if (v === "off") setSugg(p => p.filter(s => s.noteId !== activeId));
+    // Always clear suggestions for the current note and force a fresh rescan
+    // so the new mode takes effect immediately with the right quantity
+    setSugg(p => p.filter(s => s.noteId !== activeId));
+    if (v !== "off") {
+      delete lastScannedContent.current[activeId];
+      clearTimeout(timers.current.s);
+      timers.current.s = setTimeout(() => {
+        generateSuggestions(activeId, notes.find(n => n.id === activeId)?.content || "", notes);
+      }, 400);
+    }
   };
 
   const note       = notes.find(n => n.id === activeId) || notes[0];
@@ -1186,8 +1199,15 @@ Accurate or no real change: {"check":false}`,
     }
   }
 
-  /* ── Suggestion density: min suggestions (words per suggestion — higher = fewer) ── */
-  const SUGG_WORDS_PER = { zen: 85, balanced: 45, eager: 22 };
+  /* ── Suggestion density config per mode ──
+   *  maxOther = hard cap on non-fact suggestions (expand/clarity/explain/research).
+   *  Fact suggestions are ALWAYS included regardless of mode — they are safety-critical.
+   */
+  const SUGG_CONFIG = {
+    zen:      { maxOther: 2,  allowedOther: ["research"],           otherTone: "For NON-fact categories: only include \"research\" suggestions (0–2 max). Do NOT include expand, clarity, or explain — skip them entirely." },
+    balanced: { maxOther: 3,  allowedOther: ["research","clarity","explain"],  otherTone: "For NON-fact categories: include research, clarity, and explain only (no expand). Return 2–3 total from those categories." },
+    eager:    { maxOther: 9,  allowedOther: ["research","clarity","explain","expand"], otherTone: "For NON-fact categories (research, clarity, explain, expand): return 5–9. Be thorough across all those categories." },
+  };
 
   const suggestionsOn = suggFreq !== "off";
 
@@ -1211,13 +1231,12 @@ Accurate or no real change: {"check":false}`,
       : "";
 
     const wc = (text.match(/\S+/g) || []).length;
-    const wordsPer = SUGG_WORDS_PER[suggFreq] ?? 45;
-    const minSugg = Math.max(1, Math.ceil(wc / wordsPer));
+    const { maxOther, allowedOther, otherTone } = SUGG_CONFIG[suggFreq] ?? SUGG_CONFIG.balanced;
 
     setBusy(true); setStatus("Analyzing…");
     try {
       const raw = await ai(llmProvider, apiKey,
-        `You are SunnyD, an intelligent writing assistant. Analyze the active note and return fresh, specific suggestions.
+        `You are SunnyD, an intelligent writing assistant. Analyze the active note and return suggestions.
 Return ONLY a valid JSON array — no markdown, no extra text.
 
 Each item schema:
@@ -1225,12 +1244,13 @@ Each item schema:
 
 CRITICAL — textRef: Every suggestion MUST have textRef. Copy the exact phrase from the note (10–80 chars) that this suggestion refers to. This enables highlighting. Never use null.
 
-CRITICAL — NO DUPLICATES: Each suggestion MUST reference a DIFFERENT, NON-OVERLAPPING section of the note. Never suggest the same text twice. Never have two suggestions apply to the same or overlapping text. Each textRef must be unique and span a distinct part of the note. If two ideas apply to the same sentence, pick only the best one.
+CRITICAL — NO DUPLICATES: Each suggestion MUST reference a DIFFERENT, NON-OVERLAPPING section of the note. Never suggest the same text twice. Each textRef must be unique.
 
-CRITICAL — preview: Exactly 3–6 words. A short teaser shown in the panel. Full detail goes in "detail" (shown when user clicks "...more"). Never exceed 6 words.
+CRITICAL — preview: Exactly 3–6 words. A short teaser shown in the panel. Never exceed 6 words.
 
 Categories (use exact keys):
-- "fact": factual claims that need verification or correction. Preview must NOT repeat textRef — use a short correction teaser, e.g. "Correction: ~13,000 miles" not "The Great Wall..."
+- "fact": genuinely wrong factual claims — ones where the note states something clearly and specifically incorrect. ALWAYS include ALL such errors. Preview must NOT repeat textRef — use a short correction teaser, e.g. "Correction: ~13,000 miles".
+  NEVER flag: (a) approximations that are reasonably accurate (e.g. "about 50%" when the real value is 48–52% is fine), (b) claims the user has already hedged with words like "about", "roughly", "approximately", "around", "~", "nearly", "some" — hedged language is intentional and correct by definition, (c) minor rounding that doesn't change the meaning. Only flag facts that are clearly, significantly wrong in a way that would mislead a reader.
 - "expand": ideas worth developing further
 - "clarity": sentences that could be clearer or better structured
 - "explain": concepts or terms that deserve a simpler explanation
@@ -1240,16 +1260,20 @@ Categories (use exact keys):
   - Set "apply" to the inline text to add, with markdown links: e.g. "Research supports this: [Smith et al., Nature 2020](https://doi.org/10.1038/...)." Include 1-2 sentence context + links. Use the EXACT URLs from "articles".
   - "detail" must summarize the actual research findings and why they matter — include specific facts, numbers, or conclusions from the sources. Add inline markdown links in detail too: [source name](url).
 
-Generate at least ${minSugg} suggestions (${wc} words). Add more if the note genuinely warrants it — don't hold back when there are clear opportunities. Pick the most valuable.${focusNew}`,
+QUANTITY RULES (MUST follow exactly):
+1. "fact" category: include EVERY factual issue you find. Do not skip any. No cap.
+2. ${otherTone}
+${focusNew}`,
         `Active note:\n\n${text}${crossCtx}`, 1500);
 
       const cleaned = raw.replace(/```json|```/g, "").trim();
       const match = cleaned.match(/\[[\s\S]*\]/);
       const arr = match ? JSON.parse(match[0]) : JSON.parse(cleaned);
       if (Array.isArray(arr) && arr.length > 0) {
-        const newSugg = arr
-          .filter(s => s.cat !== "question")
-          .map(s => ({ ...s, id: uid(), noteId }));
+        // Facts always pass through; non-facts filtered to allowed categories then capped
+        const facts = arr.filter(s => s.cat === "fact");
+        const others = arr.filter(s => s.cat !== "fact" && s.cat !== "question" && allowedOther.includes(s.cat)).slice(0, maxOther);
+        const newSugg = [...facts, ...others].map(s => ({ ...s, id: uid(), noteId }));
         // Overlap check: two ranges overlap if a.start < b.end && a.end > b.start
         const overlaps = (a, b) => a && b && a.start < b.end && a.end > b.start;
         // Merge: keep existing valid suggestions, add new ones (no duplicate textRefs, no overlapping sections)
@@ -1280,7 +1304,13 @@ Generate at least ${minSugg} suggestions (${wc} words). Add more if the note gen
             kept.push(s);
             keptRanges.push(r);
           }
-          return [...others, ...validExisting, ...kept];
+          // Facts always kept; non-facts filtered to allowed categories and capped
+          const keptFacts = kept.filter(s => s.cat === "fact");
+          const keptOthers = kept.filter(s => s.cat !== "fact" && allowedOther.includes(s.cat));
+          const existingOtherCount = validExisting.filter(s => s.cat !== "fact").length;
+          const allowedNewOthers = Math.max(0, maxOther - existingOtherCount);
+          const combined = [...validExisting, ...keptFacts, ...keptOthers.slice(0, allowedNewOthers)];
+          return [...others, ...combined];
         });
         lastScannedContent.current[noteId] = text;
       } else if (Array.isArray(arr)) {
@@ -1910,19 +1940,63 @@ ${currentContent}`,
               <button className="x-btn" onClick={() => setActiveLectureQ(null)}>×</button>
             </div>
             <div className="lecture-q-question">"{activeLectureQ.q.text}"</div>
-            {activeLectureQ.q.answer ? (
+            {lectureQRefreshing ? (
+              <div className="lecture-q-loading">
+                <ThinkDots />
+                <span>Refreshing response…</span>
+              </div>
+            ) : activeLectureQ.q.answer ? (
               <>
                 <div className="lecture-q-answer">{activeLectureQ.q.answer}</div>
                 <div className="lecture-q-btns">
                   <button className="btn-apply" style={{ fontSize: 11, padding: "7px 16px" }}
                     onClick={() => {
-                      setContent(c => (c ? c + "\n\n" : "") + `Q: ${activeLectureQ.q.text}\n${activeLectureQ.q.answer}`);
-                      setActiveLectureQ(null);
+                      const text = `Q: ${activeLectureQ.q.text}\n${activeLectureQ.q.answer}`;
+                      navigator.clipboard.writeText(text).catch(() => {
+                        const el = document.createElement("textarea");
+                        el.value = text;
+                        document.body.appendChild(el);
+                        el.select();
+                        document.execCommand("copy");
+                        document.body.removeChild(el);
+                      });
+                      setLectureQCopied(true);
+                      setTimeout(() => setLectureQCopied(false), 1800);
                     }}>
-                    Add to notes
+                    {lectureQCopied ? "Copied!" : "Copy"}
+                  </button>
+                  <button className="lecture-q-refresh-btn" title="Regenerate response"
+                    onClick={async () => {
+                      const qId = activeLectureQ.q.id;
+                      const qText = activeLectureQ.q.text;
+                      setLectureQRefreshing(true);
+                      try {
+                        const noteContext = notes.map(n => `[${n.title}]:\n${n.content.slice(0, 400)}`).join("\n\n");
+                        const raw = await ai(
+                          llmProvider, apiKey,
+                          `You analyze live lecture transcripts to detect genuine spoken questions and generate helpful responses.
+Return ONLY valid JSON, no markdown.
+Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sentences the student could say to contribute, grounded in their notes"}]}`,
+                          `Question: "${qText}"\n\nStudent's notes for context:\n${noteContext.slice(0, 1200)}`,
+                          500
+                        );
+                        const m = raw.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
+                        const parsed = m ? JSON.parse(m[0]) : null;
+                        const newAnswer = parsed?.questions?.[0]?.answer?.trim() || activeLectureQ.q.answer;
+                        setLectureQs(prev => prev.map(q => q.id === qId ? { ...q, answer: newAnswer } : q));
+                        setActiveLectureQ(prev => prev ? { ...prev, q: { ...prev.q, answer: newAnswer } } : prev);
+                      } catch { /* keep old answer on failure */ }
+                      finally { setLectureQRefreshing(false); }
+                    }}>
+                    ↺
                   </button>
                   <button className="btn-decline" style={{ fontSize: 11, padding: "7px 14px" }}
-                    onClick={() => setActiveLectureQ(null)}>
+                    onClick={() => {
+                      const qId = activeLectureQ.q.id;
+                      setLectureQs(prev => prev.filter(q => q.id !== qId));
+                      setActiveLectureQ(null);
+                      setLectureQCopied(false);
+                    }}>
                     Dismiss
                   </button>
                 </div>
