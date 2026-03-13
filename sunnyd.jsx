@@ -131,6 +131,7 @@ const CATS = {
   clarity:  { label: "Clarity",     color: "#1448AA", bg: "#EEF3FF", border: "#88BCEE", icon: "≋" },
   explain:  { label: "Explain",     color: "#0A6868", bg: "#EDFAFA", border: "#7ECCCC", icon: "◉" },
   research: { label: "Research",    color: "#0A6868", bg: "#EDFAFA", border: "#7ECCCC", icon: "⊞" },
+  lecture:  { label: "Lecture",     color: "#5E38A0", bg: "#F5F0FF", border: "#B89EE8", icon: "🎙" },
 };
 
 /* Parse [text](url) markdown links and return React elements */
@@ -344,6 +345,13 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .lecture-q-pip{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:#5E38A0;color:#fff;font-size:8px;font-weight:700;margin-left:3px;vertical-align:middle;line-height:1;transition:background .15s;}
 .lecture-q-hl.answered .lecture-q-pip{background:var(--green);}
 
+/* ── Lecture append marker (end-of-note insert point) ── */
+.lecture-append-marker{display:inline-flex;align-items:center;gap:5px;margin-left:6px;vertical-align:middle;animation:appendMarkerIn .25s cubic-bezier(.22,1,.36,1) forwards;}
+@keyframes appendMarkerIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.lecture-append-pip{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#5E38A0;color:#fff;font-size:10px;box-shadow:0 0 0 3px rgba(94,56,160,.18),0 0 0 6px rgba(94,56,160,.07);animation:appendPulse 1.8s ease-in-out infinite;}
+@keyframes appendPulse{0%,100%{box-shadow:0 0 0 3px rgba(94,56,160,.18),0 0 0 6px rgba(94,56,160,.07)}50%{box-shadow:0 0 0 5px rgba(94,56,160,.22),0 0 0 10px rgba(94,56,160,.09)}}
+.lecture-append-label{font-size:10.5px;font-weight:600;color:#5E38A0;background:rgba(94,56,160,.08);border:1px solid rgba(94,56,160,.2);border-radius:10px;padding:2px 8px;letter-spacing:.01em;white-space:nowrap;}
+
 /* ── Lecture question answer card ── */
 .lecture-q-card{position:fixed;z-index:10000;width:340px;background:var(--page);border:1px solid var(--rule2);border-radius:12px;box-shadow:0 12px 40px rgba(50,35,15,.15),0 4px 12px rgba(50,35,15,.07);overflow:hidden;animation:cardRise .2s cubic-bezier(.22,1,.36,1);}
 .lecture-q-card-hdr{padding:11px 16px;background:linear-gradient(180deg,var(--paper) 0%,rgba(248,244,237,.7) 100%);border-bottom:1px solid var(--rule);display:flex;align-items:center;justify-content:space-between;}
@@ -521,6 +529,7 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .dc-body a{color:#0A6868;text-decoration:underline;text-underline-offset:2px;}
 .dc-body a:hover{color:#085555;}
 .dc-articles{margin-bottom:12px;}
+.dc-append-note{font-size:10px;color:#5E38A0;background:rgba(94,56,160,.07);border:1px solid rgba(94,56,160,.18);border-radius:5px;padding:5px 10px;margin:0 16px 10px;text-align:center;font-weight:500;letter-spacing:.01em;}
 .dc-art-link{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:5px;background:rgba(10,104,104,.08);border:1px solid rgba(10,104,104,.2);margin-bottom:6px;text-decoration:none;color:#0A6868;font-size:11px;transition:all .15s;}
 .dc-art-link:hover{background:rgba(10,104,104,.14);border-color:#0A6868;}
 .dc-art-src{font-weight:700;text-transform:uppercase;letter-spacing:.05em;flex-shrink:0;}
@@ -799,6 +808,8 @@ export default function SunnyDNotes() {
   const transcriptEndRef  = useRef(null);
   const scannedTranscriptRef = useRef(""); // how far into finalTranscript we've scanned
   const lectureQTimerRef  = useRef(null);
+  const lectureSuggTimerRef = useRef(null);
+  const scannedLectureSuggRef = useRef(""); // transcript already used for lecture suggestions
 
   const saveKeys = (provider, key) => {
     try {
@@ -859,6 +870,9 @@ export default function SunnyDNotes() {
       setLectureQs([]);
       setActiveLectureQ(null);
       scannedTranscriptRef.current = "";
+      scannedLectureSuggRef.current = "";
+      // Remove lecture suggestions when lecture mode turns off
+      setSugg(p => p.filter(s => s.cat !== "lecture"));
     }
     return () => { if (lectureOn) SpeechRecognition.stopListening(); };
   }, [lectureOn, browserSupportsSpeechRecognition]);
@@ -875,6 +889,19 @@ export default function SunnyDNotes() {
     if (newText.trim().length < 12) return;
     clearTimeout(lectureQTimerRef.current);
     lectureQTimerRef.current = setTimeout(() => detectLectureQuestions(finalTranscript), 2200);
+  }, [finalTranscript, lectureOn]);
+
+  /* ── Lecture suggestions: compare transcript vs note, surface missed content ── */
+  useEffect(() => {
+    if (!lectureOn || !finalTranscript) return;
+    const newText = finalTranscript.slice(scannedLectureSuggRef.current.length);
+    // Wait for at least ~40 new words before triggering a scan
+    if ((newText.match(/\S+/g) || []).length < 40) return;
+    clearTimeout(lectureSuggTimerRef.current);
+    lectureSuggTimerRef.current = setTimeout(() => {
+      const noteText = notes.find(n => n.id === activeId)?.content || "";
+      generateLectureSuggestions(activeId, noteText, finalTranscript);
+    }, 3500);
   }, [finalTranscript, lectureOn]);
 
   async function detectLectureQuestions(currentTranscript) {
@@ -923,6 +950,52 @@ ${noteContext.slice(0, 1200)}`,
         .map(q => ({ id: uid(), text: q.text.trim(), answer: q.answer?.trim() || "" }));
       return fresh.length > 0 ? [...prev, ...fresh] : prev;
     });
+  }
+
+  /* ── Lecture suggestions: find transcript content missing from the note ── */
+  async function generateLectureSuggestions(noteId, noteText, transcript) {
+    if (!transcript.trim() || transcript.length < 80) return;
+    // Only scan the new portion since last lecture-sugg scan
+    const newTranscriptPart = transcript.slice(scannedLectureSuggRef.current.length).trim();
+    if ((newTranscriptPart.match(/\S+/g) || []).length < 40) return;
+    scannedLectureSuggRef.current = transcript;
+
+    try {
+      const raw = await ai(llmProvider, apiKey,
+        `You are SunnyD, an intelligent note-taking assistant. The user is in a lecture. Compare the lecture transcript segment to the user's existing notes and identify SPECIFIC, RELEVANT pieces of information mentioned in the lecture that are MISSING from the notes and worth adding.
+
+Return ONLY a valid JSON array — no markdown, no extra text.
+Each item: {"headline":"<5-8 word headline>","preview":"<3-6 word teaser>","detail":"<2-3 sentence justification: why this matters and what specifically was said in the lecture>","apply":"<concise note-ready text to insert, written as a note, not a transcript quote>","textRef":"<exact phrase from the NOTES (10-80 chars) nearest to where this should be inserted, OR null if the content is entirely new with no related section in the notes>"}
+
+CRITICAL — only return suggestions when something GENUINELY important is missing. Do NOT suggest things already covered in the notes. Do NOT suggest trivial or obvious things.
+CRITICAL — textRef: use an exact phrase from the notes ONLY when there is a genuinely related passage nearby. If the content is brand-new with no relevant anchor in the notes, set textRef to null — do NOT invent a random anchor.
+CRITICAL — apply: write in note style (concise, clear) not transcript style. 2-4 sentences max.
+Return [] if nothing important is missing.`,
+        `Lecture segment (new content since last scan):\n"${newTranscriptPart.slice(0, 1500)}"\n\nCurrent note content:\n${noteText.slice(0, 1200) || "(empty)"}`,
+        800
+      );
+
+      const cleaned = raw.replace(/```json|```/g, "").trim();
+      const match = cleaned.match(/\[[\s\S]*\]/);
+      const arr = match ? JSON.parse(match[0]) : JSON.parse(cleaned);
+      if (!Array.isArray(arr) || arr.length === 0) return;
+
+      const newSugg = arr
+        .filter(s => s.apply && s.headline)
+        .map(s => ({ ...s, id: uid(), noteId, cat: "lecture" }));
+
+      setSugg(p => {
+        const others = p.filter(s => s.noteId !== noteId || s.cat !== "lecture");
+        const existingLecture = p.filter(s => s.noteId === noteId && s.cat === "lecture");
+        const existingHeadlines = new Set(existingLecture.map(s => s.headline?.trim().toLowerCase()));
+        const fresh = newSugg.filter(s => !existingHeadlines.has(s.headline?.trim().toLowerCase()));
+        // Cap lecture suggestions at 5 to avoid flooding the panel
+        const combined = [...existingLecture, ...fresh].slice(0, 5);
+        return [...others, ...combined];
+      });
+    } catch (e) {
+      console.error("lecture sugg:", e);
+    }
   }
 
   /* ── Render finalTranscript with detected questions highlighted ── */
@@ -982,12 +1055,16 @@ ${noteContext.slice(0, 1200)}`,
   }, [activeSugg.length, activeId]);
 
   /* ── Highlight layer: hovered suggestion + ghost ── */
+  // Checks if a suggestion is a lecture suggestion that will append to end of note
+  const isAppendSugg = s => s?.cat === "lecture" && !s?.textRef;
+
   function renderHL() {
     // Suggestion highlight on hover or when card is expanded — use fuzzy matching if textRef doesn't match
     const suggToHighlight = hoveredSuggId;
     const hovSugg = suggToHighlight ? activeSugg.find(s => s.id === suggToHighlight) : null;
     const suggRange = (() => {
       if (!hovSugg) return null;
+      if (isAppendSugg(hovSugg)) return null; // handled by end-of-note marker
       const range = findSuggestionRange(content, hovSugg);
       if (!range) return null;
       const cat = CATS[hovSugg.cat] || CATS.expand;
@@ -998,6 +1075,7 @@ ${noteContext.slice(0, 1200)}`,
     const dockedSugg = dockedCard?.suggestion;
     const dockedRange = (() => {
       if (!dockedSugg) return null;
+      if (isAppendSugg(dockedSugg)) return null; // handled by end-of-note marker
       const r = findSuggestionRange(content, dockedSugg);
       if (!r) return null;
       const cat = CATS[dockedSugg.cat] || CATS.expand;
@@ -1086,6 +1164,17 @@ ${noteContext.slice(0, 1200)}`,
     }
     if (p < content.length) out.push(<span key="tend">{parseWithLinks(content.slice(p), "tend")}</span>);
     if (p === 0 && content.length === 0) out.push(<span key="empty" />);
+
+    // End-of-note append marker for lecture suggestions with no textRef
+    const activeAppendSugg = (hovSugg && isAppendSugg(hovSugg)) || (dockedSugg && isAppendSugg(dockedSugg));
+    if (activeAppendSugg) {
+      out.push(
+        <span key="append-marker" id="lecture-append-marker" className="lecture-append-marker">
+          <span className="lecture-append-pip">✦</span>
+          <span className="lecture-append-label">New content will be added here</span>
+        </span>
+      );
+    }
 
     // Inline ghost: thinking dots or completion text
     if (ghostThinking && !ghost) {
@@ -1271,8 +1360,9 @@ ${focusNew}`,
       const arr = match ? JSON.parse(match[0]) : JSON.parse(cleaned);
       if (Array.isArray(arr) && arr.length > 0) {
         // Facts always pass through; non-facts filtered to allowed categories then capped
+        // lecture cat never comes from this path but guard anyway
         const facts = arr.filter(s => s.cat === "fact");
-        const others = arr.filter(s => s.cat !== "fact" && s.cat !== "question" && allowedOther.includes(s.cat)).slice(0, maxOther);
+        const others = arr.filter(s => s.cat !== "fact" && s.cat !== "question" && s.cat !== "lecture" && allowedOther.includes(s.cat)).slice(0, maxOther);
         const newSugg = [...facts, ...others].map(s => ({ ...s, id: uid(), noteId }));
         // Overlap check: two ranges overlap if a.start < b.end && a.end > b.start
         const overlaps = (a, b) => a && b && a.start < b.end && a.end > b.start;
@@ -1280,7 +1370,9 @@ ${focusNew}`,
         setSugg(p => {
           const others = p.filter(s => s.noteId !== noteId);
           const forThis = p.filter(s => s.noteId === noteId);
-          const validExisting = forThis.filter(s => s.textRef && text.includes(s.textRef));
+          // Always preserve lecture suggestions — they come from a separate scan
+          const lectureExisting = forThis.filter(s => s.cat === "lecture");
+          const validExisting = forThis.filter(s => s.cat !== "lecture" && s.textRef && text.includes(s.textRef));
           const existingRanges = validExisting.map(s => findSuggestionRange(text, s)).filter(Boolean);
           const existingRefs = new Set(validExisting.map(s => (s.textRef || "").trim()));
           // Filter new: must have valid ref, not duplicate ref, not overlap with existing
@@ -1304,12 +1396,12 @@ ${focusNew}`,
             kept.push(s);
             keptRanges.push(r);
           }
-          // Facts always kept; non-facts filtered to allowed categories and capped
+          // Facts always kept; non-facts filtered to allowed categories and capped; lecture preserved separately
           const keptFacts = kept.filter(s => s.cat === "fact");
-          const keptOthers = kept.filter(s => s.cat !== "fact" && allowedOther.includes(s.cat));
+          const keptOthers = kept.filter(s => s.cat !== "fact" && s.cat !== "lecture" && allowedOther.includes(s.cat));
           const existingOtherCount = validExisting.filter(s => s.cat !== "fact").length;
           const allowedNewOthers = Math.max(0, maxOther - existingOtherCount);
-          const combined = [...validExisting, ...keptFacts, ...keptOthers.slice(0, allowedNewOthers)];
+          const combined = [...validExisting, ...keptFacts, ...keptOthers.slice(0, allowedNewOthers), ...lectureExisting];
           return [...others, ...combined];
         });
         lastScannedContent.current[noteId] = text;
@@ -1363,11 +1455,12 @@ If the fragment could already be a complete sentence (they may have just forgott
     clearTimeout(timers.current.s);
 
     // Only remove suggestions whose textRef is gone (user deleted/replaced that text)
+    // Lecture suggestions with no textRef are kept — they anchor to end-of-note
     const removedIds = new Set();
     setSugg(p => {
       const filtered = p.filter(s => {
         if (s.noteId !== activeId) return true;
-        if (!s.textRef) return false;
+        if (!s.textRef) return s.cat === "lecture"; // keep lecture suggestions without textRef
         if (!v.includes(s.textRef)) { removedIds.add(s.id); return false; }
         return true;
       });
@@ -1405,7 +1498,7 @@ If the fragment could already be a complete sentence (they may have just forgott
       const removedIds = new Set();
       setSugg(p => p.filter(s => {
         if (s.noteId !== activeId) return true;
-        if (!s.textRef) return false;
+        if (!s.textRef) return s.cat === "lecture"; // keep lecture suggestions without textRef
         if (!accepted.includes(s.textRef)) { removedIds.add(s.id); return false; }
         return true;
       }));
@@ -1504,6 +1597,20 @@ Insertion context: Selection is ${isMidSentence ? "mid-sentence" : isStartOfSent
     const currentContent = content; // capture at click-time before async gap
     setSugg(p => p.map(x => x.id === s.id ? { ...x, applying: true } : x));
     setStatus("Weaving suggestion into notes…");
+
+    // Lecture suggestions with no textRef = brand-new content → append to end directly
+    if (s.cat === "lecture" && !s.textRef) {
+      const insertion = s.apply || s.detail;
+      const newContent = currentContent.trimEnd() + "\n\n" + insertion;
+      setContent(newContent);
+      setSugg(p => p.filter(x => x.id !== s.id));
+      setStatus("");
+      lastScannedContent.current[activeId] = "";
+      setTimeout(resize, 0);
+      clearTimeout(timers.current.s);
+      timers.current.s = setTimeout(() => generateSuggestions(activeId, newContent, notes), 2500);
+      return;
+    }
 
     const articlesJson = s.articles && Array.isArray(s.articles) && s.articles.length > 0
       ? JSON.stringify(s.articles)
@@ -1636,6 +1743,18 @@ ${currentContent}`,
   const getDockedCardPosition = useCallback((suggestion) => {
     const hlLayer = hlRef.current;
     const editorRect = docColRef.current?.getBoundingClientRect();
+
+    // Lecture append suggestions — position card next to the end-of-note marker
+    if (isAppendSugg(suggestion)) {
+      const marker = hlLayer?.querySelector("#lecture-append-marker");
+      if (marker && editorRect) {
+        const markerRect = marker.getBoundingClientRect();
+        const top = Math.min(markerRect.top, window.innerHeight - CARD_HEIGHT - 16);
+        return { top: Math.max(top, 80), left: editorRect.right + 16 };
+      }
+      return { top: 120, left: (editorRect?.right ?? 0) + 16 };
+    }
+
     const range = findSuggestionRange(content, suggestion);
     if (!range) return { top: 120, left: (editorRect?.right ?? 0) + 16 };
     const refIndex = range.start;
@@ -1903,6 +2022,8 @@ ${currentContent}`,
                   setLectureQs([]);
                   setActiveLectureQ(null);
                   scannedTranscriptRef.current = "";
+                  scannedLectureSuggRef.current = "";
+                  setSugg(p => p.filter(s => s.cat !== "lecture"));
                 }}>Clear</button>
               </div>
             </div>
