@@ -1,3 +1,4 @@
+
 # SunnyD Notes
 
 An intelligent note-taking app powered by AI. SunnyD reads your notes as you write and surfaces contextual suggestions—fact checks, expansions, clarity improvements, research citations, and more. Your API key stays in your browser; nothing is stored on any server.
@@ -23,7 +24,10 @@ An intelligent note-taking app powered by AI. SunnyD reads your notes as you wri
 ### Prerequisites
 
 - Node.js 18+
-- [OpenAI API key](https://platform.openai.com/api-keys)
+- API key for at least one provider:
+  - [OpenAI](https://platform.openai.com/api-keys)
+  - [Claude](https://console.anthropic.com/settings/keys)
+  - [Gemini](https://aistudio.google.com/apikey)
 
 ### Install & Run
 
@@ -34,7 +38,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173), enter your OpenAI API key when prompted, and start writing.
+Open [http://localhost:5173](http://localhost:5173), choose your LLM (OpenAI, Claude, or Gemini), enter the corresponding API key when prompted, and start writing.
 
 ### Build for Production
 
@@ -60,7 +64,7 @@ SunnyD_NoteTaker/
 
 ## How It Works
 
-1. **API key** — Stored in `sessionStorage`; never sent anywhere except OpenAI.
+1. **API keys** — Stored in `sessionStorage`; only sent to the provider you choose (OpenAI, Claude, or Gemini).
 2. **Suggestions** — Generated as you write; frequency controlled by "Suggestions" bar (Off, Zen, Just Right, Eager).
 3. **Fact checks** — Only real factual errors are flagged; caveats and "consult sources" are filtered out.
 4. **Apply** — Click a suggestion card to expand, then Apply to weave it into your notes.
@@ -69,14 +73,15 @@ SunnyD_NoteTaker/
 
 | Setting        | Storage           | Description                          |
 |----------------|-------------------|--------------------------------------|
-| API key        | `sessionStorage`  | OpenAI API key                       |
+| LLM provider   | `sessionStorage`  | OpenAI / Claude / Gemini             |
+| API keys       | `sessionStorage`  | Per-provider keys (`sd_key_openai`, etc.) |
 | Suggestion freq| `sessionStorage`  | Off / Zen / Just Right / Eager  |
 
 ## Tech Stack
 
 - **React 18** — UI
 - **Vite 5** — Build & dev server
-- **OpenAI GPT-4o-mini** — Suggestions, fact checks, completions
+- **LLM options** — OpenAI (gpt-4o-mini), Claude (claude-haiku-4-5), or Gemini (gemini-3.1-flash-lite-preview) — pick the fastest model per provider
 - **react-speech-recognition** — Live lecture transcription ([GitHub](https://github.com/JamesBrill/react-speech-recognition))
 
 ## License

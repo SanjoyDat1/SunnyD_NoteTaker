@@ -1,20 +1,89 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
 
-/* ─── OpenAI ─────────────────────────────────────────────────────────────── */
-async function ai(apiKey, system, user, max = 900) {
-  const r = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      max_tokens: max,
-      messages: [{ role: "system", content: system }, { role: "user", content: user }],
-    }),
-  });
-  const d = await r.json();
-  if (d.error) throw new Error(d.error.message);
-  return d.choices?.[0]?.message?.content?.trim() || "";
+/* ─── LLM: OpenAI · Claude · Gemini ─────────────────────────────────────── */
+// Lightest/fastest model per provider as of March 2026
+const LLM_CONFIG = {
+  openai: { model: "gpt-4o-mini" },
+  claude: { model: "claude-haiku-4-5" },       // Claude's fastest model
+  gemini: { model: "gemini-2.0-flash-lite" },   // Gemini's fastest GA model
+};
+
+async function ai(provider, apiKey, system, user, max = 900) {
+  if (!apiKey?.trim()) throw new Error("API key required");
+
+  // ── OpenAI ────────────────────────────────────────────────────────────────
+  if (provider === "openai") {
+    let r, d;
+    try {
+      r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: LLM_CONFIG.openai.model,
+          max_tokens: max,
+          messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        }),
+      });
+    } catch (e) { throw new Error("OpenAI: network error — " + e.message); }
+    try { d = await r.json(); } catch { throw new Error("OpenAI: invalid JSON response"); }
+    if (!r.ok) throw new Error("OpenAI: " + (d.error?.message || `HTTP ${r.status}`));
+    return d.choices?.[0]?.message?.content?.trim() || "";
+  }
+
+  // ── Claude ────────────────────────────────────────────────────────────────
+  // IMPORTANT: "anthropic-dangerous-direct-browser-access" is REQUIRED for any
+  // browser → api.anthropic.com call; without it the preflight OPTIONS request
+  // is rejected and the browser throws "Failed to fetch" (CORS error).
+  if (provider === "claude") {
+    let r, d;
+    try {
+      r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: LLM_CONFIG.claude.model,
+          max_tokens: max,
+          system,
+          messages: [{ role: "user", content: [{ type: "text", text: user }] }],
+        }),
+      });
+    } catch (e) { throw new Error("Claude: network error — " + e.message); }
+    try { d = await r.json(); } catch { throw new Error("Claude: invalid JSON response"); }
+    if (!r.ok) throw new Error("Claude: " + (d.error?.message || `HTTP ${r.status}`));
+    return d.content?.[0]?.text?.trim() || "";
+  }
+
+  // ── Gemini ────────────────────────────────────────────────────────────────
+  // API key goes in the URL query string — no Authorization header needed.
+  // generativelanguage.googleapis.com supports browser CORS natively.
+  if (provider === "gemini") {
+    const endpoint =
+      `https://generativelanguage.googleapis.com/v1beta/models/` +
+      `${LLM_CONFIG.gemini.model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    let r, d;
+    try {
+      r = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: system }] },
+          contents: [{ role: "user", parts: [{ text: user }] }],
+          generationConfig: { maxOutputTokens: max },
+        }),
+      });
+    } catch (e) { throw new Error("Gemini: network error — " + e.message); }
+    try { d = await r.json(); } catch { throw new Error("Gemini: invalid JSON response"); }
+    if (!r.ok) throw new Error("Gemini: " + (d.error?.message || `HTTP ${r.status}`));
+    return d.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+  }
+
+  throw new Error("Unknown provider: " + provider);
 }
 
 /* ─── Seed ───────────────────────────────────────────────────────────────── */
@@ -209,6 +278,7 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .key-title{font-family:'DM Sans',sans-serif;font-size:22px;font-weight:700;margin-bottom:6px;line-height:1.25;letter-spacing:-.02em;}
 .key-sub{font-size:13px;color:var(--ink3);line-height:1.6;margin-bottom:24px;}
 .key-lbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--ink3);display:block;margin-bottom:7px;}
+.key-select{width:100%;padding:10px 13px;border:1px solid var(--rule2);border-radius:6px;background:var(--page);color:var(--ink);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;transition:border-color .18s;margin-bottom:10px;cursor:pointer;}
 .key-inp{width:100%;padding:10px 13px;border:1px solid var(--rule2);border-radius:6px;background:var(--paper);color:var(--ink);font-family:'DM Sans',sans-serif;font-size:13.5px;outline:none;transition:border-color .18s;margin-bottom:10px;}
 .key-inp:focus{border-color:var(--ink2);}
 .key-btn{width:100%;padding:11px;background:var(--ink);color:var(--paper);border:none;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13.5px;font-weight:600;transition:opacity .18s;margin-bottom:14px;}
@@ -238,6 +308,8 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .sugg-freq-btn:hover{border-color:var(--rule2);color:var(--ink);}
 .sugg-freq-btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink);}
 .hdr-r{display:flex;align-items:center;gap:10px;}
+.hdr-llm-select{padding:4px 8px;border-radius:5px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:500;color:var(--ink2);cursor:pointer;transition:border-color .15s;}
+.hdr-llm-select:hover{border-color:var(--rule2);}
 .hdr-sep{width:1px;height:14px;background:var(--rule2);opacity:.6;}
 .hdr-wc{font-size:11px;color:var(--ink3);opacity:.6;}
 .btn-link{font-size:11px;color:var(--ink3);background:none;border:none;cursor:pointer;padding:3px 7px;border-radius:4px;transition:background .15s;}
@@ -559,26 +631,41 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:var(--rule2);border-radius:10px;}
 `;
 
-/* ─── Key Screen ─────────────────────────────────────────────────────────── */
+/* ─── Providers (shared) ──────────────────────────────────────────────────── */
+const PROVIDERS = [
+  { id: "openai", name: "OpenAI", placeholder: "sk-...", keyPrefix: "sk-", url: "https://platform.openai.com/api-keys" },
+  { id: "claude", name: "Claude", placeholder: "sk-ant-...", keyPrefix: "sk-ant-", url: "https://console.anthropic.com/settings/keys" },
+  { id: "gemini", name: "Gemini", placeholder: "AIza...", keyPrefix: "AIza", url: "https://aistudio.google.com/apikey" },
+];
+
 function KeyScreen({ onSave }) {
-  const [val, setVal] = useState("");
+  const [provider, setProvider] = useState(() => { try { return sessionStorage.getItem("sd_provider") || "openai"; } catch { return "openai"; } });
+  const [val, setVal] = useState(() => { try { return sessionStorage.getItem(`sd_key_${sessionStorage.getItem("sd_provider") || "openai"}`) || ""; } catch { return ""; } });
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const p = PROVIDERS.find(x => x.id === provider) || PROVIDERS[0];
+
+  const handleProviderChange = (newProvider) => {
+    setProvider(newProvider);
+    setErr("");
+    try { setVal(sessionStorage.getItem(`sd_key_${newProvider}`) || ""); } catch { setVal(""); }
+  };
 
   const submit = async () => {
     const k = val.trim();
     if (!k) { setErr("Please enter your API key."); return; }
-    if (!k.startsWith("sk-")) { setErr("Key should start with sk-"); return; }
     setLoading(true); setErr("");
     try {
-      await ai(k, "Reply with the single word: ready", "ping", 5);
-      onSave(k);
+      await ai(provider, k, "Reply with the single word: ready", "ping", 10);
+      onSave(provider, k);
     } catch (e) {
-      const msg = e.message || "";
-      if (msg.includes("maximum") || msg.includes("token") || msg.includes("content")) {
-        onSave(k);
+      const msg = (e.message || "").toLowerCase();
+      // Some providers error on very short max_tokens — still accept the key
+      if (msg.includes("max_tokens") || msg.includes("maximum") || msg.includes("token") || msg.includes("content_policy")) {
+        onSave(provider, k);
       } else {
-        setErr("Could not connect: " + msg.slice(0, 80));
+        setErr(e.message?.slice(0, 120) || "Could not connect — check your key and try again.");
       }
     } finally { setLoading(false); }
   };
@@ -588,9 +675,13 @@ function KeyScreen({ onSave }) {
       <div className="key-card">
         <div className="key-mark">S</div>
         <div className="key-title">SunnyD Notes</div>
-        <div className="key-sub">AI-assisted note-taking with full client-side control. Open-source and self-hosted — your API key is stored locally in your browser and is never transmitted to any server except OpenAI.</div>
-        <label className="key-lbl">OpenAI API Key</label>
-        <input className="key-inp" type="password" placeholder="sk-..." value={val}
+        <div className="key-sub">AI-assisted note-taking with full client-side control. Open-source and self-hosted — your API keys are stored locally and only sent to the provider you choose.</div>
+        <label className="key-lbl">LLM Provider</label>
+        <select className="key-select" value={provider} onChange={e => handleProviderChange(e.target.value)}>
+          {PROVIDERS.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+        </select>
+        <label className="key-lbl">{p.name} API Key</label>
+        <input className="key-inp" type="password" placeholder={p.placeholder} value={val}
           onChange={e => { setVal(e.target.value); setErr(""); }}
           onKeyDown={e => e.key === "Enter" && !loading && submit()} autoFocus />
         {err && <div className="key-err">{err}</div>}
@@ -598,7 +689,7 @@ function KeyScreen({ onSave }) {
           {loading ? "Verifying…" : "Continue"}
         </button>
         <div className="key-note">
-          Obtain an API key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">platform.openai.com/api-keys</a>
+          Get an API key at <a href={p.url} target="_blank" rel="noreferrer">{p.url.replace("https://", "")}</a>
         </div>
       </div>
     </div>
@@ -638,7 +729,13 @@ function FactPop({ ann, onDismiss, onClose, onApply }) {
 
 /* ─── Main ───────────────────────────────────────────────────────────────── */
 export default function SunnyDNotes() {
-  const [apiKey,      setApiKey]      = useState(() => { try { return sessionStorage.getItem("sd_key") || ""; } catch { return ""; } });
+  const [llmProvider, setLlmProvider] = useState(() => { try { return sessionStorage.getItem("sd_provider") || "openai"; } catch { return "openai"; } });
+  const [apiKey,      setApiKey]      = useState(() => {
+    try {
+      const p = sessionStorage.getItem("sd_provider") || "openai";
+      return sessionStorage.getItem(`sd_key_${p}`) || sessionStorage.getItem("sd_key") || "";
+    } catch { return ""; }
+  });
   const [notes,       setNotes]       = useState(SEED);
   const [activeId,    setActiveId]    = useState(1);
   const [suggestions, setSugg]        = useState([]);
@@ -677,8 +774,31 @@ export default function SunnyDNotes() {
   const busyWithSelAction = useRef(false);
   const transcriptEndRef = useRef(null);
 
-  const saveKey  = k => { try { sessionStorage.setItem("sd_key", k); } catch {} setApiKey(k); };
-  const resetKey = () => { try { sessionStorage.removeItem("sd_key"); } catch {} setApiKey(""); };
+  const saveKeys = (provider, key) => {
+    try {
+      sessionStorage.setItem("sd_provider", provider);
+      sessionStorage.setItem(`sd_key_${provider}`, key);
+      sessionStorage.setItem("sd_key", key);
+      setLlmProvider(provider);
+      setApiKey(key);
+    } catch {}
+  };
+  const resetKey = () => {
+    try {
+      ["openai", "claude", "gemini"].forEach(p => sessionStorage.removeItem(`sd_key_${p}`));
+      sessionStorage.removeItem("sd_provider");
+      sessionStorage.removeItem("sd_key");
+    } catch {}
+    setApiKey("");
+    setLlmProvider("openai");
+  };
+  const setProviderAndLoadKey = (p) => {
+    setLlmProvider(p);
+    try {
+      sessionStorage.setItem("sd_provider", p);
+      setApiKey(sessionStorage.getItem(`sd_key_${p}`) || "");
+    } catch {}
+  };
   const setSuggFreqAndSave = v => {
     setSuggFreq(v);
     try { sessionStorage.setItem("sd_suggFreq", v); } catch {}
@@ -896,7 +1016,7 @@ export default function SunnyDNotes() {
       checked.current.add(t);
       setBusy(true); setStatus("Scanning…");
       try {
-        const raw = await ai(apiKey,
+        const raw = await ai(llmProvider, apiKey,
           `You are SunnyD fact-checker. Find ONLY clear, verifiable factual errors.
 
 Return check:true ONLY when the sentence contains a WRONG fact (wrong number, wrong date, wrong claim) that you can correct with a DIFFERENT fact. The replacement MUST change the actual information.
@@ -977,7 +1097,7 @@ Accurate or no real change: {"check":false}`,
 
     setBusy(true); setStatus("Analyzing…");
     try {
-      const raw = await ai(apiKey,
+      const raw = await ai(llmProvider, apiKey,
         `You are SunnyD, an intelligent writing assistant. Analyze the active note and return fresh, specific suggestions.
 Return ONLY a valid JSON array — no markdown, no extra text.
 
@@ -1067,7 +1187,7 @@ Generate at least ${minSugg} suggestions (${wc} words). Add more if the note gen
     ghostBusy.current = true;
     setGhostThinking(true);
     try {
-      const c = await ai(apiKey,
+      const c = await ai(llmProvider, apiKey,
         `You are SunnyD. Complete the user's incomplete thought ONLY when they are clearly mid-sentence or mid-phrase.
 Return ONLY the continuation — 1 short sentence, no quotes, no preamble, don't repeat what they wrote.
 If the fragment could already be a complete sentence (they may have just forgotten a period), return nothing.`,
@@ -1217,7 +1337,7 @@ Insertion context: Selection is ${isMidSentence ? "mid-sentence" : isStartOfSent
       explain:   ["Explain the selected term or phrase simply for a curious learner. Keep the original selection. Use add_after. Your explanation must flow naturally — use a parenthetical (like this), an em dash —, or a colon : depending on context. For mid-sentence: start your text with the connector, e.g. ' (i.e., ...)' or ' — '. For end of sentence: use ' — ' or newline for a new sentence. Do not truncate. Match the note tone.", ctxBlock],
     };
     try {
-      const raw = await ai(apiKey, sys + " " + cfg[action][0], cfg[action][1], 900);
+      const raw = await ai(llmProvider, apiKey, sys + " " + cfg[action][0], cfg[action][1], 900);
       const cleaned = raw.replace(/```json|```/g, "").trim();
       const match = cleaned.match(/\{[\s\S]*\}/);
       let parsed = { op: "replace", text: raw };
@@ -1243,6 +1363,7 @@ Insertion context: Selection is ${isMidSentence ? "mid-sentence" : isStartOfSent
     let newContent = null;
     try {
       const weaved = await ai(
+        llmProvider,
         apiKey,
         `You are SunnyD. Integrate a writing suggestion into the user's notes.
 
@@ -1577,7 +1698,7 @@ ${currentContent}`,
     { key: "explain",   icon: "◉", label: "Explain",   desc: "Break it down simply" },
   ];
 
-  if (!apiKey) return <><style>{CSS}</style><KeyScreen onSave={saveKey} /></>;
+  if (!apiKey) return <><style>{CSS}</style><KeyScreen onSave={saveKeys} /></>;
 
   return (
     <>
@@ -1611,6 +1732,9 @@ ${currentContent}`,
               </>
             )}
             <span className="hdr-wc">{wc} words</span>
+            <select className="hdr-llm-select" value={llmProvider} onChange={e => setProviderAndLoadKey(e.target.value)} title="Switch LLM">
+              {PROVIDERS.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
             <button className="btn-link" onClick={resetKey}>Change key</button>
           </div>
         </header>
