@@ -1,5 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from "docx";
+import { saveAs } from "file-saver";
 
 /* ─── LLM: OpenAI · Claude · Gemini ─────────────────────────────────────── */
 // Lightest/fastest model per provider as of March 2026
@@ -113,6 +115,40 @@ The key insight is that most users don't want more features, they want fewer dec
 How might we design for the 10% of users who drive 90% of the value?`,
   },
 ];
+
+/* ── Local persistence helpers ── */
+const LS_NOTES_KEY   = "sd_notes_v1";
+const LS_ACTIVE_KEY  = "sd_activeId_v1";
+
+function loadNotes() {
+  try {
+    const raw = localStorage.getItem(LS_NOTES_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+  return SEED;
+}
+
+function loadActiveId(notes) {
+  try {
+    const raw = localStorage.getItem(LS_ACTIVE_KEY);
+    if (raw) {
+      const id = JSON.parse(raw);
+      if (notes.some(n => n.id === id)) return id;
+    }
+  } catch {}
+  return notes[0]?.id ?? 1;
+}
+
+function saveNotes(notes) {
+  try { localStorage.setItem(LS_NOTES_KEY, JSON.stringify(notes)); } catch {}
+}
+
+function saveActiveId(id) {
+  try { localStorage.setItem(LS_ACTIVE_KEY, JSON.stringify(id)); } catch {}
+}
 
 let _n = 0;
 const uid = () => `a${++_n}_${Date.now()}`;
@@ -311,6 +347,15 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .hdr-r{display:flex;align-items:center;gap:10px;}
 .hdr-llm-select{padding:4px 8px;border-radius:5px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:500;color:var(--ink2);cursor:pointer;transition:border-color .15s;}
 .hdr-llm-select:hover{border-color:var(--rule2);}
+.export-wrap{position:relative;}
+.export-btn{padding:5px 11px;border-radius:6px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .15s;}
+.export-btn:hover{border-color:var(--rule2);background:var(--paper);color:var(--ink);}
+.export-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:9999;width:220px;background:var(--page);border:1px solid var(--rule2);border-radius:10px;box-shadow:0 8px 28px rgba(50,35,15,.13),0 2px 8px rgba(50,35,15,.07);overflow:hidden;animation:cardRise .18s cubic-bezier(.22,1,.36,1);}
+.export-item{display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;background:none;border:none;cursor:pointer;text-align:left;transition:background .12s;}
+.export-item:hover{background:var(--paper);}
+.export-item-ic{font-size:18px;flex-shrink:0;}
+.export-item-lbl{display:block;font-size:12px;font-weight:600;color:var(--ink);font-family:'DM Sans',sans-serif;}
+.export-item-desc{display:block;font-size:10px;color:var(--ink3);font-family:'DM Sans',sans-serif;margin-top:1px;}
 .hdr-sep{width:1px;height:14px;background:var(--rule2);opacity:.6;}
 .hdr-wc{font-size:11px;color:var(--ink3);opacity:.6;}
 .btn-link{font-size:11px;color:var(--ink3);background:none;border:none;cursor:pointer;padding:3px 7px;border-radius:4px;transition:background .15s;}
@@ -378,6 +423,7 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .nr-lbl{font-size:12px;color:var(--ink2);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .note-row.on .nr-lbl{color:var(--ink);font-weight:600;}
 .sb-footer{margin-top:auto;padding-top:14px;border-top:1px solid var(--rule);}
+.sb-autosave{font-size:9.5px;color:#1A6835;font-weight:600;margin-bottom:10px;opacity:.75;letter-spacing:.01em;}
 .sb-ttl{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);opacity:.5;margin-bottom:8px;}
 .sb-item{margin-bottom:7px;}
 .sb-h{font-size:10.5px;font-weight:600;color:var(--ink2);margin-bottom:1px;}
@@ -765,8 +811,8 @@ export default function SunnyDNotes() {
       return sessionStorage.getItem(`sd_key_${p}`) || sessionStorage.getItem("sd_key") || "";
     } catch { return ""; }
   });
-  const [notes,       setNotes]       = useState(SEED);
-  const [activeId,    setActiveId]    = useState(1);
+  const [notes,       setNotes]       = useState(() => loadNotes());
+  const [activeId,    setActiveId]    = useState(() => { const n = loadNotes(); return loadActiveId(n); });
   const [suggestions, setSugg]        = useState([]);
   const [shownSuggIds,   setShownSuggIds]   = useState(new Set());
   const [hoveredSuggId,  setHoveredSuggId]  = useState(null);
@@ -787,6 +833,7 @@ export default function SunnyDNotes() {
   const [activeLectureQ, setActiveLectureQ] = useState(null); // { q, x, y }
   const [lectureQCopied, setLectureQCopied] = useState(false);
   const [lectureQRefreshing, setLectureQRefreshing] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const { transcript, interimTranscript, finalTranscript, listening, resetTranscript, browserSupportsSpeechRecognition } = useSpeechRecognition({ clearTranscriptOnListen: false });
 
@@ -876,6 +923,10 @@ export default function SunnyDNotes() {
     }
     return () => { if (lectureOn) SpeechRecognition.stopListening(); };
   }, [lectureOn, browserSupportsSpeechRecognition]);
+
+  /* ── Persist notes to localStorage on every change ── */
+  useEffect(() => { saveNotes(notes); }, [notes]);
+  useEffect(() => { saveActiveId(activeId); }, [activeId]);
 
   /* ── Auto-scroll transcript to bottom when new content ── */
   useEffect(() => {
@@ -1737,6 +1788,52 @@ ${currentContent}`,
     setShownSuggIds(prev => { const n = new Set(prev); n.delete(id); return n; });
   };
 
+  /* ── Export notes to .docx ── */
+  const exportToDocx = async (exportAll = false) => {
+    const toExport = exportAll ? notes : notes.filter(n => n.id === activeId);
+    const children = [];
+
+    toExport.forEach((note, ni) => {
+      if (ni > 0) {
+        children.push(new Paragraph({ text: "", spacing: { after: 200 } }));
+        children.push(new Paragraph({
+          text: "─────────────────────────────────",
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 200 },
+        }));
+      }
+      children.push(new Paragraph({
+        text: note.title || "Untitled",
+        heading: HeadingLevel.HEADING_1,
+        spacing: { after: 200 },
+      }));
+
+      const lines = (note.content || "").split("\n");
+      for (const line of lines) {
+        if (line.trim() === "") {
+          children.push(new Paragraph({ text: "", spacing: { after: 80 } }));
+        } else {
+          children.push(new Paragraph({
+            children: [new TextRun({ text: line, size: 24, font: "Calibri" })],
+            spacing: { after: 120 },
+          }));
+        }
+      }
+    });
+
+    const doc = new Document({
+      creator: "SunnyD NoteTaker",
+      title: exportAll ? "All Notes" : (toExport[0]?.title || "Note"),
+      sections: [{ children }],
+    });
+
+    const blob = await Packer.toBlob(doc);
+    const filename = exportAll
+      ? `SunnyD_Notes_${new Date().toISOString().slice(0, 10)}.docx`
+      : `${(toExport[0]?.title || "Note").replace(/[^a-z0-9]/gi, "_")}.docx`;
+    saveAs(blob, filename);
+  };
+
   const CARD_WIDTH = 300;
   const CARD_HEIGHT = 420;
 
@@ -1971,7 +2068,7 @@ ${currentContent}`,
   return (
     <>
       <style>{CSS}</style>
-      <div className="app" onClick={() => setSelMenu(null)}>
+      <div className="app" onClick={() => { setSelMenu(null); setExportOpen(false); }}>
 
         {/* Header */}
         <header className="hdr">
@@ -2000,6 +2097,29 @@ ${currentContent}`,
               </>
             )}
             <span className="hdr-wc">{wc} words</span>
+            <div className="export-wrap" title="Export notes">
+              <button className="export-btn" onClick={() => setExportOpen(p => !p)}>
+                ↓ Export
+              </button>
+              {exportOpen && (
+                <div className="export-menu" onClick={e => e.stopPropagation()}>
+                  <button className="export-item" onClick={() => { exportToDocx(false); setExportOpen(false); }}>
+                    <span className="export-item-ic">📄</span>
+                    <span>
+                      <span className="export-item-lbl">This note (.docx)</span>
+                      <span className="export-item-desc">Open in Word or Google Docs</span>
+                    </span>
+                  </button>
+                  <button className="export-item" onClick={() => { exportToDocx(true); setExportOpen(false); }}>
+                    <span className="export-item-ic">📚</span>
+                    <span>
+                      <span className="export-item-lbl">All notes (.docx)</span>
+                      <span className="export-item-desc">Export all notes in one file</span>
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
             <select className="hdr-llm-select" value={llmProvider} onChange={e => setProviderAndLoadKey(e.target.value)} title="Switch LLM">
               {PROVIDERS.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
             </select>
@@ -2162,6 +2282,7 @@ Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sente
               </div>
             ))}
             <div className="sb-footer">
+              <div className="sb-autosave">✓ Notes saved locally</div>
               <div className="sb-ttl">How it works</div>
               {[
                 ["Fact checks",  "Right panel — hover to highlight"],
