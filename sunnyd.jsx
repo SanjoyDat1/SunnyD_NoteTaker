@@ -327,7 +327,7 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .app{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
 
 /* ── Key screen ── */
-.key-screen{display:flex;align-items:center;justify-content:center;height:100vh;background:var(--paper);padding:24px;}
+.key-screen{display:flex;align-items:center;justify-content:center;height:100vh;background:#E8761A;padding:24px;}
 .key-card{width:100%;max-width:400px;background:var(--page);border-radius:4px;border:1px solid var(--rule2);box-shadow:0 4px 24px var(--sh);padding:40px;}
 .key-mark{width:34px;height:34px;background:var(--ink);color:var(--paper);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:'DM Sans',sans-serif;font-weight:700;font-size:14px;margin-bottom:20px;}
 .key-mark-logo{width:72px;height:72px;object-fit:contain;padding:8px 5px;border-radius:50%;background:#E8761A;box-shadow:0 3px 14px rgba(232,118,26,.3);margin-bottom:20px;display:block;}
