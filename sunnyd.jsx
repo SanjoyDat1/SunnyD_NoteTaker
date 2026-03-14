@@ -560,12 +560,12 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 
 /* ── Reading state in suggestion panel ── */
 .reading-state{display:flex;flex-direction:column;align-items:center;padding:28px 20px 24px;gap:16px;animation:annEnter .4s ease forwards;}
-.reading-brand{position:relative;width:90px;height:48px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-.reading-logo-img{width:90px;height:auto;object-fit:contain;position:relative;z-index:1;border-radius:6px;}
-.reading-scan-ring{position:absolute;inset:-10px;border-radius:12px;border:1.5px solid rgba(235,140,20,.28);animation:scanRing 2s ease-in-out infinite;pointer-events:none;}
-.reading-scan-ring.r2{inset:-20px;border-color:rgba(235,140,20,.13);animation-delay:.5s;animation-duration:2.4s;}
-.reading-scan-ring.r3{inset:-30px;border-color:rgba(235,140,20,.06);animation-delay:1s;animation-duration:2.8s;}
-@keyframes scanRing{0%{transform:scale(.9);opacity:0}25%{opacity:1}100%{transform:scale(1.08);opacity:0}}
+.reading-brand{position:relative;width:80px;height:80px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.reading-logo-img{width:80px;height:80px;object-fit:contain;object-position:center;padding:10px 6px;border-radius:50%;background:#E8761A;position:relative;z-index:1;box-shadow:0 4px 16px rgba(232,118,26,.35);}
+.reading-scan-ring{position:absolute;inset:-8px;border-radius:50%;border:1.5px solid rgba(232,118,26,.3);animation:scanRing 2s ease-in-out infinite;pointer-events:none;}
+.reading-scan-ring.r2{inset:-18px;border-color:rgba(232,118,26,.15);animation-delay:.55s;animation-duration:2.5s;}
+.reading-scan-ring.r3{inset:-30px;border-color:rgba(232,118,26,.07);animation-delay:1.1s;animation-duration:3s;}
+@keyframes scanRing{0%{transform:scale(.88);opacity:0}25%{opacity:1}100%{transform:scale(1.1);opacity:0}}
 .reading-label{font-size:11.5px;font-weight:600;color:var(--ink2);font-family:'DM Sans',sans-serif;letter-spacing:.01em;min-height:18px;text-align:center;transition:opacity .2s ease;}
 .reading-label.fade-out{opacity:0;}
 .reading-bars{display:flex;flex-direction:column;gap:6px;width:100%;padding:0 8px;}
