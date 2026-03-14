@@ -330,6 +330,7 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .key-screen{display:flex;align-items:center;justify-content:center;height:100vh;background:var(--paper);padding:24px;}
 .key-card{width:100%;max-width:400px;background:var(--page);border-radius:4px;border:1px solid var(--rule2);box-shadow:0 4px 24px var(--sh);padding:40px;}
 .key-mark{width:34px;height:34px;background:var(--ink);color:var(--paper);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:'DM Sans',sans-serif;font-weight:700;font-size:14px;margin-bottom:20px;}
+.key-mark-logo{width:72px;height:72px;object-fit:contain;padding:8px 5px;border-radius:50%;background:#E8761A;box-shadow:0 3px 14px rgba(232,118,26,.3);margin-bottom:20px;display:block;}
 .key-title{font-family:'DM Sans',sans-serif;font-size:22px;font-weight:700;margin-bottom:6px;line-height:1.25;letter-spacing:-.02em;}
 .key-sub{font-size:13px;color:var(--ink3);line-height:1.6;margin-bottom:24px;}
 .key-lbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--ink3);display:block;margin-bottom:7px;}
@@ -786,7 +787,7 @@ function KeyScreen({ onSave }) {
   return (
     <div className="key-screen">
       <div className="key-card">
-        <div className="key-mark">S</div>
+        <img src="/sunnyd-logo.png" alt="SunnyD" className="key-mark-logo" />
         <div className="key-title">SunnyD Notes</div>
         <div className="key-sub">AI-assisted note-taking with full client-side control. Open-source and self-hosted — your API keys are stored locally and only sent to the provider you choose.</div>
         <label className="key-lbl">LLM Provider</label>
