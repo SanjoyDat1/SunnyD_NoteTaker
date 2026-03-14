@@ -234,19 +234,37 @@ function ThinkDots() {
   return <span className="think-dots"><span /><span /><span /></span>;
 }
 
-/* ─── ThinkingCard (skeleton while AI works) ─────────────────────────────── */
-function ThinkingCard({ delay = 0 }) {
+/* ─── ReadingState: shown in suggestion panel while AI scans notes ────────── */
+function ReadingState() {
+  const msgs = [
+    "Reading your notes…",
+    "Checking for insights…",
+    "Finding opportunities…",
+    "Analyzing content…",
+  ];
+  const [msgIdx, setMsgIdx] = useState(0);
+  const [fade, setFade] = useState(true);
+  useEffect(() => {
+    const t = setInterval(() => {
+      setFade(false);
+      setTimeout(() => { setMsgIdx(i => (i + 1) % msgs.length); setFade(true); }, 220);
+    }, 2000);
+    return () => clearInterval(t);
+  }, []);
   return (
-    <div className="ann-card ann-thinking" style={{ animationDelay: `${delay}ms` }}>
-      <div className="ann-card-inner">
-        <div className="ann-tag">
-          <span className="ann-tag-dot" style={{ background: "var(--rule2)" }} />
-          <ThinkDots />
-        </div>
-        <div className="ann-thinking-skel">
-          <div className="ann-skel" style={{ width: "78%" }} />
-          <div className="ann-skel" style={{ width: "54%", marginTop: 7 }} />
-        </div>
+    <div className="reading-state">
+      <div className="reading-brand">
+        <img src="/sunnyd-logo.png" alt="SunnyD" className="reading-logo-img" />
+        <span className="reading-scan-ring" />
+        <span className="reading-scan-ring r2" />
+        <span className="reading-scan-ring r3" />
+      </div>
+      <div className={`reading-label${fade ? "" : " fade-out"}`}>{msgs[msgIdx]}</div>
+      <div className="reading-bars">
+        <span className="reading-bar" style={{ width: "72%", animationDelay: "0ms" }} />
+        <span className="reading-bar" style={{ width: "48%", animationDelay: "200ms" }} />
+        <span className="reading-bar" style={{ width: "63%", animationDelay: "400ms" }} />
+        <span className="reading-bar" style={{ width: "38%", animationDelay: "600ms" }} />
       </div>
     </div>
   );
@@ -538,10 +556,30 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
   font-size:11px;
   color:var(--ink3);
 }
-.ann-thinking{opacity:0;animation:annEnter .5s ease forwards;height:auto;min-height:44px;}
-.ann-thinking .ann-card-inner{height:auto;padding:12px 14px;align-items:flex-start;}
-.ann-thinking-skel{margin-left:auto;}
 .ann-enter{opacity:0;animation:annEnter .55s cubic-bezier(.22,1,.36,1) forwards;}
+
+/* ── Reading state in suggestion panel ── */
+.reading-state{display:flex;flex-direction:column;align-items:center;padding:28px 20px 24px;gap:16px;animation:annEnter .4s ease forwards;}
+.reading-brand{position:relative;width:90px;height:48px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.reading-logo-img{width:90px;height:auto;object-fit:contain;position:relative;z-index:1;border-radius:6px;}
+.reading-scan-ring{position:absolute;inset:-10px;border-radius:12px;border:1.5px solid rgba(235,140,20,.28);animation:scanRing 2s ease-in-out infinite;pointer-events:none;}
+.reading-scan-ring.r2{inset:-20px;border-color:rgba(235,140,20,.13);animation-delay:.5s;animation-duration:2.4s;}
+.reading-scan-ring.r3{inset:-30px;border-color:rgba(235,140,20,.06);animation-delay:1s;animation-duration:2.8s;}
+@keyframes scanRing{0%{transform:scale(.9);opacity:0}25%{opacity:1}100%{transform:scale(1.08);opacity:0}}
+.reading-label{font-size:11.5px;font-weight:600;color:var(--ink2);font-family:'DM Sans',sans-serif;letter-spacing:.01em;min-height:18px;text-align:center;transition:opacity .2s ease;}
+.reading-label.fade-out{opacity:0;}
+.reading-bars{display:flex;flex-direction:column;gap:6px;width:100%;padding:0 8px;}
+.reading-bar{display:block;height:5px;background:var(--rule);border-radius:3px;animation:readPulse 1.5s ease-in-out infinite;transform-origin:left;}
+@keyframes readPulse{0%,100%{opacity:.25;transform:scaleX(.88)}50%{opacity:.7;transform:scaleX(1)}}
+
+/* ── Animated header while reading ── */
+.ann-col-hdr-reading{display:inline-flex;align-items:center;gap:4px;font-weight:700;}
+.ann-col-hdr-dots{display:inline-flex;gap:2px;align-items:center;margin-left:2px;}
+.ann-col-hdr-dots span{width:3px;height:3px;border-radius:50%;background:currentColor;animation:hdrDot 1.2s ease-in-out infinite;}
+.ann-col-hdr-dots span:nth-child(2){animation-delay:.2s;}
+.ann-col-hdr-dots span:nth-child(3){animation-delay:.4s;}
+@keyframes hdrDot{0%,80%,100%{opacity:.25;transform:scale(.8)}40%{opacity:1;transform:scale(1)}}
+
 @keyframes annEnter{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:translateX(0)}}
 
 /* Weave overlay — blur text behind, cream tint, typing animation */
@@ -2097,12 +2135,12 @@ ${currentContent}`,
               </>
             )}
             <span className="hdr-wc">{wc} words</span>
-            <div className="export-wrap" title="Export notes">
+            <div className="export-wrap" title="Export notes" onClick={e => e.stopPropagation()}>
               <button className="export-btn" onClick={() => setExportOpen(p => !p)}>
                 ↓ Export
               </button>
               {exportOpen && (
-                <div className="export-menu" onClick={e => e.stopPropagation()}>
+                <div className="export-menu">
                   <button className="export-item" onClick={() => { exportToDocx(false); setExportOpen(false); }}>
                     <span className="export-item-ic">📄</span>
                     <span>
@@ -2349,18 +2387,14 @@ Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sente
               {/* Annotation column — slides off when card is docked */}
               <div ref={annColRef} className={`ann-col sugg-panel${panelHidden ? " hidden" : ""}`}>
                 <div className="ann-col-hdr">
-                  {activeSugg.length > 0
-                    ? `${shownSugg.length} suggestion${shownSugg.length !== 1 ? "s" : ""}`
-                    : "Suggestions"}
+                  {showThinking
+                    ? <span className="ann-col-hdr-reading">SunnyD<span className="ann-col-hdr-dots"><span /><span /><span /></span></span>
+                    : activeSugg.length > 0
+                      ? `${shownSugg.length} suggestion${shownSugg.length !== 1 ? "s" : ""}`
+                      : "Suggestions"}
                 </div>
 
-                {showThinking && (
-                  <>
-                    <ThinkingCard delay={0} />
-                    <ThinkingCard delay={220} />
-                    <ThinkingCard delay={440} />
-                  </>
-                )}
+                {showThinking && <ReadingState status={statusTxt} />}
 
                 <div
                   ref={panelBodyRef}
