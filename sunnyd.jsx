@@ -1,7 +1,10 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
 import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from "docx";
 import { saveAs } from "file-saver";
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Placeholder from "@tiptap/extension-placeholder";
 
 /* ─── LLM: OpenAI · Claude · Gemini ─────────────────────────────────────── */
 // Lightest/fastest model per provider as of March 2026
@@ -89,6 +92,17 @@ async function ai(provider, apiKey, system, user, max = 900) {
 }
 
 /* ─── Seed ───────────────────────────────────────────────────────────────── */
+/* Convert HTML to plain text for AI calls */
+function htmlToText(html) {
+  if (!html) return "";
+  if (!html.trimStart().startsWith("<")) return html; // already plain text
+  try {
+    const div = document.createElement("div");
+    div.innerHTML = html;
+    return div.textContent || div.innerText || "";
+  } catch { return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(); }
+}
+
 const SEED = [
   {
     id: 1, title: "Research Notes",
@@ -148,6 +162,57 @@ function saveNotes(notes) {
 
 function saveActiveId(id) {
   try { localStorage.setItem(LS_ACTIVE_KEY, JSON.stringify(id)); } catch {}
+}
+
+/* ── Disk file persistence (File System Access API) ── */
+const IDB_NAME = "sunnyd_db";
+const IDB_STORE = "store";
+const FILE_HANDLE_KEY = "notes_file";
+
+const supportsFileAccess = () => typeof window !== "undefined" && "showSaveFilePicker" in window;
+
+function openIDB() {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open(IDB_NAME, 1);
+    r.onerror = () => reject(r.error);
+    r.onsuccess = () => resolve(r.result);
+    r.onupgradeneeded = (e) => { e.target.result.createObjectStore(IDB_STORE); };
+  });
+}
+
+async function getStoredFileHandle() {
+  try {
+    const db = await openIDB();
+    return new Promise((resolve, reject) => {
+      const t = db.transaction(IDB_STORE, "readonly");
+      const req = t.objectStore(IDB_STORE).get(FILE_HANDLE_KEY);
+      req.onsuccess = () => resolve(req.result ?? null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch { return null; }
+}
+
+async function setStoredFileHandle(handle) {
+  const db = await openIDB();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(IDB_STORE, "readwrite");
+    t.objectStore(IDB_STORE).put(handle, FILE_HANDLE_KEY);
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
+  });
+}
+
+async function readFromFile(handle) {
+  const file = await handle.getFile();
+  const text = await file.text();
+  const data = JSON.parse(text);
+  return { notes: data.notes ?? [], activeId: data.activeId ?? null };
+}
+
+async function writeToFile(handle, notes, activeId) {
+  const w = await handle.createWritable();
+  await w.write(JSON.stringify({ notes, activeId, version: 1 }, null, 2));
+  await w.close();
 }
 
 let _n = 0;
@@ -443,6 +508,9 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .note-row.on .nr-lbl{color:var(--ink);font-weight:600;}
 .sb-footer{margin-top:auto;padding-top:14px;border-top:1px solid var(--rule);}
 .sb-autosave{font-size:9.5px;color:#1A6835;font-weight:600;margin-bottom:10px;opacity:.75;letter-spacing:.01em;}
+.sb-autosave.sb-disk{margin-bottom:8px;}
+.sb-disk-btn{display:block;width:100%;margin-bottom:12px;padding:6px 10px;font-size:10px;font-weight:600;font-family:'DM Sans',sans-serif;color:var(--ink2);background:var(--paper);border:1px solid var(--rule2);border-radius:6px;cursor:pointer;transition:all .15s;}
+.sb-disk-btn:hover{background:var(--page);border-color:var(--ink3);color:var(--ink);}
 .sb-ttl{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);opacity:.5;margin-bottom:8px;}
 .sb-item{margin-bottom:7px;}
 .sb-h{font-size:10.5px;font-weight:600;color:var(--ink2);margin-bottom:1px;}
@@ -468,22 +536,30 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .ann-badge{padding:1px 7px;border-radius:10px;background:var(--paper);border:1px solid var(--rule2);color:var(--ink2);font-size:9px;font-weight:700;}
 .divider{height:1px;background:var(--rule);margin-bottom:26px;}
 .ta-wrap{position:relative;width:100%;}
-.hl-layer{position:absolute;inset:0;font-family:'DM Sans',sans-serif;font-size:16px;line-height:1.85;white-space:pre-wrap;word-break:break-word;color:var(--ink);pointer-events:none;overflow:hidden;z-index:2;}
-.hl-layer.has-sel-preview{pointer-events:auto;z-index:2;overflow:visible;}
-.hf{text-decoration:underline;text-decoration-style:wavy;text-decoration-color:rgba(160,105,30,.5);text-decoration-thickness:1.5px;text-underline-offset:3px;background:rgba(210,160,60,.1);border-radius:2px;}
-.hf.fresh{animation:annFresh .6s ease forwards;}
-@keyframes annFresh{0%{background:rgba(210,160,60,.32)}100%{background:rgba(210,160,60,.1)}}
-.hq{background:rgba(90,105,160,.09);border-bottom:1.5px solid rgba(70,88,150,.28);border-radius:2px 2px 0 0;}
-.hq.fresh{animation:annFreshQ .6s ease forwards;}
-@keyframes annFreshQ{0%{background:rgba(90,105,160,.26)}100%{background:rgba(90,105,160,.09)}}
-.ta{position:relative;z-index:1;display:block;width:100%;min-height:460px;background:transparent;color:transparent;caret-color:var(--ink);font-family:'DM Sans',sans-serif;font-size:16px;line-height:1.85;padding:0;border:none;outline:none;resize:none;word-break:break-word;}
-.ta:read-only{cursor:default;}
-.ta::placeholder{color:#C8C0B4;}
+/* ── Tiptap Editor ── */
+.note-editor-wrap{width:100%;}
+.note-editor{width:100%;min-height:60vh;padding:0;font-size:16px;line-height:1.7;cursor:text;}
+.note-editor .ProseMirror{min-height:100%;outline:none;font-family:'DM Sans',sans-serif;font-size:16px;line-height:1.85;color:var(--ink);}
+.note-editor .ProseMirror p.is-editor-empty:first-child::before{content:attr(data-placeholder);color:#C8C0B4;pointer-events:none;height:0;float:left;}
+.note-editor h1{font-size:1.6em;font-weight:600;margin:1rem 0 .4rem;}
+.note-editor h2{font-size:1.3em;font-weight:600;margin:.9rem 0 .3rem;}
+.note-editor h3{font-size:1.1em;font-weight:600;margin:.8rem 0 .3rem;}
+.note-editor ul,.note-editor ol{padding-left:1.4rem;margin:.5rem 0;}
+.note-editor pre{background:#1e1e1e;color:#d4d4d4;border-radius:6px;padding:.75rem 1rem;font-family:monospace;font-size:13px;overflow-x:auto;}
+.note-editor p{margin:.2rem 0;}
+/* Toolbar */
+.editor-toolbar{display:flex;gap:4px;padding:6px 8px;border-bottom:1px solid rgba(0,0,0,.1);margin-bottom:4px;}
+.editor-toolbar-btn{padding:4px 10px;border-radius:4px;border:1px solid transparent;background:transparent;cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;}
+.editor-toolbar-btn:hover{background:rgba(0,0,0,.06);}
+.editor-toolbar-btn.active{background:rgba(37,99,235,.12);color:#2563eb;}
+/* Selection result bar */
+.sel-result-bar{display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px 14px;background:var(--paper);border:1px solid var(--rule2);border-radius:8px;font-size:13px;}
+.sel-result-expl{flex:1;color:var(--ink2);font-size:12px;}
+.sel-result-apply{font-size:12px;padding:5px 14px;}
+/* Weave overlay (simplified – fixed top-right of editor) */
+.weave-overlay-fixed{position:absolute;top:0;left:0;right:0;padding:12px 16px;background:rgba(255,255,255,.92);border-radius:8px;backdrop-filter:blur(4px);border:1px solid var(--rule);z-index:10;}
 .hl-link{color:#0A6868;text-decoration:underline;text-underline-offset:2px;pointer-events:auto;cursor:pointer;}
 .hl-link:hover{color:#085555;}
-.ghost-inline{color:rgba(155,148,138,0.75);animation:ghostFadeIn .35s ease forwards;}
-@keyframes ghostFadeIn{from{opacity:0}to{opacity:1}}
-.ghost-thinking-inline{color:var(--ink3);margin-left:3px;}
 
 /* ── Ghost hint bar (Tab/Esc hint shown when ghost is active) ── */
 .ghost-hint{display:flex;align-items:center;gap:7px;margin-top:8px;padding:6px 12px;background:var(--paper);border:1px solid var(--rule);border-radius:5px;opacity:0;animation:fadeSoft .2s ease forwards;}
@@ -752,6 +828,89 @@ const PROVIDERS = [
   { id: "gemini", name: "Gemini", placeholder: "AIza...", keyPrefix: "AIza", url: "https://aistudio.google.com/apikey" },
 ];
 
+/* ─── Toolbar ────────────────────────────────────────────────────────────── */
+function Toolbar({ editor }) {
+  if (!editor) return null;
+  const btn = (label, action, activeCheck) => (
+    <button
+      className={`editor-toolbar-btn${editor.isActive(activeCheck) ? " active" : ""}`}
+      onMouseDown={e => { e.preventDefault(); action(); }}
+      title={label}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="editor-toolbar">
+      {btn("B",    () => editor.chain().focus().toggleBold().run(),        "bold")}
+      {btn("I",    () => editor.chain().focus().toggleItalic().run(),      "italic")}
+      {btn("H1",   () => editor.chain().focus().toggleHeading({ level: 1 }).run(), { type: "heading", attrs: { level: 1 } })}
+      {btn("H2",   () => editor.chain().focus().toggleHeading({ level: 2 }).run(), { type: "heading", attrs: { level: 2 } })}
+      {btn("• List", () => editor.chain().focus().toggleBulletList().run(), "bulletList")}
+      {btn("</>",  () => editor.chain().focus().toggleCodeBlock().run(),   "codeBlock")}
+    </div>
+  );
+}
+
+/* ─── NoteEditor ─────────────────────────────────────────────────────────── */
+const NoteEditor = forwardRef(function NoteEditor({ content, onChange, onKeyDown }, ref) {
+  const editor = useEditor({
+    extensions: [
+      StarterKit,
+      Placeholder.configure({ placeholder: "Start writing — SunnyD will assist as you go." }),
+    ],
+    content: content || "",
+    onUpdate({ editor }) {
+      onChange({ text: editor.getText(), html: editor.getHTML() });
+    },
+  });
+
+  // Expose methods to parent via ref
+  useImperativeHandle(ref, () => ({
+    insertAtCursor(text) {
+      editor?.commands.insertContent(text);
+    },
+    getSelection() {
+      if (!editor) return "";
+      const { from, to } = editor.state.selection;
+      return editor.state.doc.textBetween(from, to, " ");
+    },
+    replaceSelection(text) {
+      editor?.chain().focus().deleteSelection().insertContent(text).run();
+    },
+    setEditorContent(html) {
+      if (editor) editor.commands.setContent(html || "", false);
+    },
+    getEditorDom() {
+      return editor?.view?.dom ?? null;
+    },
+  }), [editor]);
+
+  // Sync content when note changes (note switching)
+  useEffect(() => {
+    if (editor && content !== editor.getHTML()) {
+      editor.commands.setContent(content || "", false);
+    }
+  }, [content, editor]);
+
+  // Forward keyboard events
+  useEffect(() => {
+    const dom = editor?.view?.dom;
+    if (!dom || !onKeyDown) return;
+    dom.addEventListener("keydown", onKeyDown);
+    return () => dom.removeEventListener("keydown", onKeyDown);
+  }, [editor, onKeyDown]);
+
+  return (
+    <div className="note-editor-wrap">
+      <Toolbar editor={editor} />
+      <div className="note-editor">
+        <EditorContent editor={editor} />
+      </div>
+    </div>
+  );
+});
+
 function KeyScreen({ onSave }) {
   const [provider, setProvider] = useState(() => { try { return sessionStorage.getItem("sd_provider") || "openai"; } catch { return "openai"; } });
   const [val, setVal] = useState(() => { try { return sessionStorage.getItem(`sd_key_${sessionStorage.getItem("sd_provider") || "openai"}`) || ""; } catch { return ""; } });
@@ -864,7 +1023,6 @@ export default function SunnyDNotes() {
   const [busy,        setBusy]        = useState(false);
   const [statusTxt,   setStatus]      = useState("");
   const [copied,      setCopied]      = useState(false);
-  const [weaveRect,   setWeaveRect]   = useState(null);
   const [suggFreq,    setSuggFreq]    = useState(() => { try { return sessionStorage.getItem("sd_suggFreq") || "balanced"; } catch { return "balanced"; } });
   const [lectureOn,   setLectureOn]   = useState(false);
   const [showFullTranscript, setShowFullTranscript] = useState(false);
@@ -873,13 +1031,12 @@ export default function SunnyDNotes() {
   const [lectureQCopied, setLectureQCopied] = useState(false);
   const [lectureQRefreshing, setLectureQRefreshing] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [savingToDisk, setSavingToDisk] = useState(false);
 
   const { transcript, interimTranscript, finalTranscript, listening, resetTranscript, browserSupportsSpeechRecognition } = useSpeechRecognition({ clearTranscriptOnListen: false });
 
-  const taRef       = useRef(null);
-  const hlRef       = useRef(null);
+  const editorRef   = useRef(null);
   const docColRef   = useRef(null);
-  const taWrapRef   = useRef(null);
   const mainAreaRef = useRef(null);
   const annColRef   = useRef(null);
   const panelBodyRef = useRef(null);
@@ -896,6 +1053,8 @@ export default function SunnyDNotes() {
   const lectureQTimerRef  = useRef(null);
   const lectureSuggTimerRef = useRef(null);
   const scannedLectureSuggRef = useRef(""); // transcript already used for lecture suggestions
+  const fileHandleRef = useRef(null);
+  const diskSaveTimeoutRef = useRef(null);
 
   const saveKeys = (provider, key) => {
     try {
@@ -938,8 +1097,11 @@ export default function SunnyDNotes() {
   };
 
   const note       = notes.find(n => n.id === activeId) || notes[0];
-  const content    = note.content;
-  const setContent = v => setNotes(p => p.map(n => n.id === activeId ? { ...n, content: v } : n));
+  // noteHtml = HTML stored in notes; content = plain text used for all AI calls
+  const noteHtml   = note.content;
+  const content    = htmlToText(noteHtml);
+  // setContent: sets editor content (and the editor's onChange updates notes via handleEditorChange)
+  const setContent = v => { editorRef.current?.setEditorContent(v); };
   const setTitle   = v => setNotes(p => p.map(n => n.id === activeId ? { ...n, title:   v } : n));
   const activeSugg = suggestions.filter(s => s.noteId === activeId && (!s.textRef || content.includes(s.textRef)));
   const applyingSugg = suggestions.find(s => s.applying);
@@ -963,9 +1125,43 @@ export default function SunnyDNotes() {
     return () => { if (lectureOn) SpeechRecognition.stopListening(); };
   }, [lectureOn, browserSupportsSpeechRecognition]);
 
-  /* ── Persist notes to localStorage on every change ── */
+  /* ── On mount: try to load notes from disk file if we have a saved handle ── */
+  useEffect(() => {
+    if (!supportsFileAccess()) return;
+    let cancelled = false;
+    (async () => {
+      const handle = await getStoredFileHandle();
+      if (!handle || cancelled) return;
+      try {
+        const permission = await handle.queryPermission?.({ mode: "readwrite" });
+        if (permission !== "granted") return;
+        const { notes: fileNotes, activeId: fileActiveId } = await readFromFile(handle);
+        if (cancelled || !Array.isArray(fileNotes) || fileNotes.length === 0) return;
+        fileHandleRef.current = handle;
+        setNotes(fileNotes);
+        setActiveId(fileActiveId && fileNotes.some(n => n.id === fileActiveId) ? fileActiveId : fileNotes[0].id);
+        saveNotes(fileNotes);
+        saveActiveId(fileActiveId ?? fileNotes[0].id);
+        setSavingToDisk(true);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  /* ── Persist notes to localStorage on every change; if disk file is active, write there too (debounced) ── */
   useEffect(() => { saveNotes(notes); }, [notes]);
   useEffect(() => { saveActiveId(activeId); }, [activeId]);
+  useEffect(() => {
+    const handle = fileHandleRef.current;
+    if (!handle) return;
+    clearTimeout(diskSaveTimeoutRef.current);
+    diskSaveTimeoutRef.current = setTimeout(async () => {
+      try {
+        await writeToFile(handle, notes, activeId);
+      } catch {}
+    }, 600);
+    return () => clearTimeout(diskSaveTimeoutRef.current);
+  }, [notes, activeId]);
 
   /* ── Auto-scroll transcript to bottom when new content ── */
   useEffect(() => {
@@ -1146,140 +1342,6 @@ Return [] if nothing important is missing.`,
 
   /* ── Highlight layer: hovered suggestion + ghost ── */
   // Checks if a suggestion is a lecture suggestion that will append to end of note
-  const isAppendSugg = s => s?.cat === "lecture" && !s?.textRef;
-
-  function renderHL() {
-    // Suggestion highlight on hover or when card is expanded — use fuzzy matching if textRef doesn't match
-    const suggToHighlight = hoveredSuggId;
-    const hovSugg = suggToHighlight ? activeSugg.find(s => s.id === suggToHighlight) : null;
-    const suggRange = (() => {
-      if (!hovSugg) return null;
-      if (isAppendSugg(hovSugg)) return null; // handled by end-of-note marker
-      const range = findSuggestionRange(content, hovSugg);
-      if (!range) return null;
-      const cat = CATS[hovSugg.cat] || CATS.expand;
-      return { id: "shl", ...range, kind: "sugg", cat };
-    })();
-
-    // Docked card href highlight — category-colored light tint + solid border
-    const dockedSugg = dockedCard?.suggestion;
-    const dockedRange = (() => {
-      if (!dockedSugg) return null;
-      if (isAppendSugg(dockedSugg)) return null; // handled by end-of-note marker
-      const r = findSuggestionRange(content, dockedSugg);
-      if (!r) return null;
-      const cat = CATS[dockedSugg.cat] || CATS.expand;
-      return { id: dockedSugg.id, ...r, kind: "ref", cat };
-    })();
-
-    const overlaps = (a, b) => a.start < b.end && a.end > b.start;
-
-    // Merge and sort all ranges
-    const baseRanges = [];
-    if (suggRange && (!dockedRange || !overlaps(suggRange, dockedRange))) baseRanges.push(suggRange);
-    if (dockedRange) baseRanges.push(dockedRange);
-    const ranges = baseRanges.sort((a, b) => a.start - b.start);
-
-    const sel = selRes;
-    const selStart = sel?.start ?? -1;
-    const selEnd = sel?.end ?? -1;
-    const hasSel = sel && selStart >= 0 && selEnd <= content.length;
-
-    const renderRange = (r) => {
-      const addHref = dockedRange && overlaps(r, dockedRange);
-      const hrefStyle = dockedRange?.cat ? { background: dockedRange.cat.bg, border: `1px solid ${dockedRange.cat.color}`, borderRadius: "3px" } : {};
-      if (r.kind === "ref") return <span key="href" className="href" style={{ whiteSpace: "pre-wrap", ...hrefStyle }}>{content.slice(r.start, r.end)}</span>;
-      return (
-        <span key="shl" className="hs" style={{ whiteSpace: "pre-wrap", background: r.cat.bg, boxShadow: `0 0 0 1.5px ${r.cat.border}`, borderRadius: "2px" }}>
-          {content.slice(r.start, r.end)}
-        </span>
-      );
-    };
-
-    const renderSegment = (segStart, segEnd, excludeSel, keyPrefix) => {
-      const segRanges = excludeSel && hasSel ? ranges.filter(r => r.end <= selStart || r.start >= selEnd) : ranges;
-      const segRangesFiltered = segRanges.filter(r => r.start < segEnd && r.end > segStart);
-      const out = [];
-      let p = segStart;
-      for (const r of segRangesFiltered.sort((a, b) => a.start - b.start)) {
-        if (r.start < p) continue;
-        if (r.start > p) out.push(<span key={`${keyPrefix}-${p}`}>{parseWithLinks(content.slice(p, r.start), `${keyPrefix}-${p}`)}</span>);
-        out.push(renderRange(r));
-        p = r.end;
-      }
-      if (p < segEnd) out.push(<span key={`${keyPrefix}-${p}`}>{parseWithLinks(content.slice(p, segEnd), `${keyPrefix}-${p}`)}</span>);
-      return out;
-    };
-
-    if (hasSel) {
-      const selText = content.slice(selStart, selEnd);
-      const showStrike = sel.op === "replace" || sel.op === "delete";
-      const showAdd = !!sel.text;
-      return (
-        <>
-          {renderSegment(0, selStart, true, "pre")}
-          {showAdd && sel.op === "add_before" && (
-            <span key="add-before" className="sel-inline-add" style={{ whiteSpace: "pre-wrap" }}>{sel.text}{"\n\n"}</span>
-          )}
-          <span key="sel" className={showStrike ? "sel-strike" : "sel-pending"} style={{ whiteSpace: "pre-wrap" }}>{selText}</span>
-          {showAdd && (sel.op === "replace" || sel.op === "add_after" || (sel.op === "delete" && sel.text)) && (
-            <span key="add-inline" className="sel-inline-add" style={{ whiteSpace: "pre-wrap" }}>{(sel.op === "add_after" ? "\n\n" : "")}{sel.text}</span>
-          )}
-          <div key="preview" className="sel-inline-preview" onClick={e => e.stopPropagation()}>
-            <div className="sel-preview-hdr">
-              <span className="sel-preview-badge">{sel.action === "summarize" ? "Summary" : sel.action === "expand" ? "Expanded" : "Explanation"}</span>
-            </div>
-            {sel.text && <div className="sel-preview-body">{sel.text}</div>}
-            {sel.explanation && sel.text && <div className="sel-preview-hint">{sel.explanation}</div>}
-            {sel.explanation && !sel.text && <div className="sel-overview">{sel.explanation}</div>}
-            <div className="sel-preview-btns">
-              <button className="btn-apply" onClick={e => { e.stopPropagation(); weaveSelResult(); }}>Apply</button>
-              <button className="btn-decline" onClick={e => { e.stopPropagation(); setSelRes(null); }}>Decline</button>
-            </div>
-          </div>
-          {renderSegment(selEnd, content.length, true, "post")}
-          {ghostThinking && !ghost && <span key="gt" className="ghost-thinking-inline"><span className="think-dots"><span /><span /><span /></span></span>}
-          {ghost && <span key="gh" className="ghost-inline">{ghost.text}</span>}
-        </>
-      );
-    }
-
-    const out = [];
-    let p = 0;
-    for (const r of ranges) {
-      if (r.start < p) continue;
-      if (r.start > p) out.push(<span key={`t${p}`}>{parseWithLinks(content.slice(p, r.start), `t${p}`)}</span>);
-      out.push(renderRange(r));
-      p = r.end;
-    }
-    if (p < content.length) out.push(<span key="tend">{parseWithLinks(content.slice(p), "tend")}</span>);
-    if (p === 0 && content.length === 0) out.push(<span key="empty" />);
-
-    // End-of-note append marker for lecture suggestions with no textRef
-    const activeAppendSugg = (hovSugg && isAppendSugg(hovSugg)) || (dockedSugg && isAppendSugg(dockedSugg));
-    if (activeAppendSugg) {
-      out.push(
-        <span key="append-marker" id="lecture-append-marker" className="lecture-append-marker">
-          <span className="lecture-append-pip">✦</span>
-          <span className="lecture-append-label">New content will be added here</span>
-        </span>
-      );
-    }
-
-    // Inline ghost: thinking dots or completion text
-    if (ghostThinking && !ghost) {
-      out.push(
-        <span key="ghost-think" className="ghost-thinking-inline">
-          <span className="think-dots"><span /><span /><span /></span>
-        </span>
-      );
-    }
-    if (ghost) {
-      out.push(<span key="ghost-text" className="ghost-inline">{ghost.text}</span>);
-    }
-
-    return out;
-  }
 
   /* ── Fact check: adds to right-panel suggestions only (highlight on hover) ── */
   function isRejectableFactCheck(original, correction, replacement) {
@@ -1530,28 +1592,21 @@ If the fragment could already be a complete sentence (they may have just forgott
     finally { ghostBusy.current = false; }
   }
 
-  /* ── Resize ── */
-  const resize = useCallback(() => {
-    const ta = taRef.current;
-    if (ta) { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; }
-  }, []);
-
-  /* ── Input ── */
-  const handleChange = e => {
-    const v = e.target.value;
-    const cur = e.target.selectionEnd;
-    setContent(v); setGhost(null); setGhostThinking(false); resize();
+  /* ── Editor onChange handler ── */
+  const handleEditorChange = useCallback(({ text, html }) => {
+    // Persist HTML into notes array
+    setNotes(p => p.map(n => n.id === activeId ? { ...n, content: html } : n));
+    setGhost(null); setGhostThinking(false);
     clearTimeout(timers.current.t); clearTimeout(timers.current.f);
     clearTimeout(timers.current.s);
 
-    // Only remove suggestions whose textRef is gone (user deleted/replaced that text)
-    // Lecture suggestions with no textRef are kept — they anchor to end-of-note
+    // Only remove suggestions whose textRef is gone; keep lecture suggestions with no textRef
     const removedIds = new Set();
     setSugg(p => {
       const filtered = p.filter(s => {
         if (s.noteId !== activeId) return true;
-        if (!s.textRef) return s.cat === "lecture"; // keep lecture suggestions without textRef
-        if (!v.includes(s.textRef)) { removedIds.add(s.id); return false; }
+        if (!s.textRef) return s.cat === "lecture";
+        if (!text.includes(s.textRef)) { removedIds.add(s.id); return false; }
         return true;
       });
       return filtered;
@@ -1561,68 +1616,43 @@ If the fragment could already be a complete sentence (they may have just forgott
       setDockedCard(null); setPanelHidden(false);
     }
 
-    // Only clear checked/dismissed for text no longer in content
-    checked.current = new Set([...checked.current].filter(t => v.includes(t)));
-    dismissed.current.fact = new Set([...dismissed.current.fact].filter(t => v.includes(t)));
-    dismissed.current.research = new Set([...dismissed.current.research].filter(t => v.includes(t)));
+    checked.current = new Set([...checked.current].filter(t => text.includes(t)));
+    dismissed.current.fact = new Set([...dismissed.current.fact].filter(t => text.includes(t)));
+    dismissed.current.research = new Set([...dismissed.current.research].filter(t => text.includes(t)));
 
     const snapId = activeId;
     const snapNotes = notes;
-    timers.current.t = setTimeout(() => runGhost(v, cur), 4800);
+    timers.current.t = setTimeout(() => runGhost(text, text.length), 4800);
     if (suggestionsOn) {
-      timers.current.f = setTimeout(() => runFactCheck(v), 5500);
-      timers.current.s = setTimeout(() => generateSuggestions(snapId, v, snapNotes), 7000);
+      timers.current.f = setTimeout(() => runFactCheck(text), 5500);
+      timers.current.s = setTimeout(() => generateSuggestions(snapId, text, snapNotes), 7000);
     }
-  };
+  }, [activeId, dockedCard, notes, suggestionsOn]);
 
-  const handleKeyDown = e => {
+  const handleKeyDown = useCallback(e => {
     if (e.key === "Tab" && ghost) {
       e.preventDefault();
-      const pos = ghost.pos;
-      const accepted = content.slice(0, pos) + ghost.text + content.slice(pos);
-      const newPos = pos + ghost.text.length;
-      setContent(accepted);
+      editorRef.current?.insertAtCursor(ghost.text);
       setGhost(null);
       clearTimeout(timers.current.t); clearTimeout(timers.current.f);
       clearTimeout(timers.current.s);
-      const removedIds = new Set();
-      setSugg(p => p.filter(s => {
-        if (s.noteId !== activeId) return true;
-        if (!s.textRef) return s.cat === "lecture"; // keep lecture suggestions without textRef
-        if (!accepted.includes(s.textRef)) { removedIds.add(s.id); return false; }
-        return true;
-      }));
-      setShownSuggIds(prev => { const n = new Set(prev); removedIds.forEach(id => n.delete(id)); return n; });
-      if (dockedCard?.suggestion && removedIds.has(dockedCard.suggestion.id)) { setDockedCard(null); setPanelHidden(false); }
-      checked.current = new Set([...checked.current].filter(t => accepted.includes(t)));
-      dismissed.current.fact = new Set([...dismissed.current.fact].filter(t => accepted.includes(t)));
-      dismissed.current.research = new Set([...dismissed.current.research].filter(t => accepted.includes(t)));
-      if (suggestionsOn) {
-        timers.current.f = setTimeout(() => runFactCheck(accepted), 5500);
-        timers.current.s = setTimeout(() => generateSuggestions(activeId, accepted, notes), 7000);
-      }
-      setTimeout(() => { if (taRef.current) { taRef.current.selectionStart = taRef.current.selectionEnd = newPos; } resize(); }, 0);
     } else if (e.key === "Escape" && ghost) {
       e.preventDefault();
       setGhost(null);
     }
-    // Note: regular typing clears ghost via handleChange
-  };
+  }, [ghost]);
 
-  const syncScroll = () => { if (hlRef.current && taRef.current) hlRef.current.scrollTop = taRef.current.scrollTop; };
-
-  /* ── Selection — reads from textarea, not window.getSelection() ── */
+  /* ── Selection — reads from Tiptap editor ── */
   const handleMouseUp = e => {
     const mouseX = e.clientX;
     const mouseY = e.clientY;
     setTimeout(() => {
-      const ta = taRef.current;
-      if (!ta) { setSelMenu(null); return; }
-      const { selectionStart: start, selectionEnd: end } = ta;
-      if (start === end) { setSelMenu(null); return; }
-      const text = ta.value.slice(start, end).trim();
-      if (text.length < 10) { setSelMenu(null); return; }
-      setSelMenu({ text, start, end, x: mouseX, y: mouseY - 10 });
+      const selectedText = (editorRef.current?.getSelection() || "").trim();
+      if (!selectedText || selectedText.length < 10) { setSelMenu(null); return; }
+      // Compute character positions in plain text for context extraction
+      const start = content.indexOf(selectedText);
+      const end = start !== -1 ? start + selectedText.length : -1;
+      setSelMenu({ text: selectedText, start, end, x: mouseX, y: mouseY - 10 });
     }, 25);
   };
 
@@ -1692,11 +1722,10 @@ Insertion context: Selection is ${isMidSentence ? "mid-sentence" : isStartOfSent
     if (s.cat === "lecture" && !s.textRef) {
       const insertion = s.apply || s.detail;
       const newContent = currentContent.trimEnd() + "\n\n" + insertion;
-      setContent(newContent);
+      editorRef.current?.setEditorContent(newContent);
       setSugg(p => p.filter(x => x.id !== s.id));
       setStatus("");
       lastScannedContent.current[activeId] = "";
-      setTimeout(resize, 0);
       clearTimeout(timers.current.s);
       timers.current.s = setTimeout(() => generateSuggestions(activeId, newContent, notes), 2500);
       return;
@@ -1764,7 +1793,6 @@ ${currentContent}`,
             setTimeout(() => runFactCheck(newContent), 1500);
             setTimeout(() => generateSuggestions(activeId, newContent, notes), 2500);
           }
-          setTimeout(resize, 0);
           return;
         }
       }
@@ -1795,7 +1823,6 @@ ${currentContent}`,
         setTimeout(() => runFactCheck(newContent), 1500);
         setTimeout(() => generateSuggestions(activeId, newContent, notes), 2500);
       }
-      setTimeout(resize, 0);
     }
   };
 
@@ -1804,19 +1831,18 @@ ${currentContent}`,
     clearTimeout(timers.current.s);
     clearTimeout(timers.current.f);
     const { start, end, text, op } = selRes;
-    let next = content;
+    let next = content; // plain text manipulation
     if (op === "replace") next = content.slice(0, start) + text + content.slice(end);
     else if (op === "add_after") next = content.slice(0, end) + (text || "") + content.slice(end);
     else if (op === "add_before") next = content.slice(0, start) + (text || "") + content.slice(start);
     else if (op === "delete") next = content.slice(0, start) + (text || "") + content.slice(end);
-    setContent(next);
+    editorRef.current?.setEditorContent(next);
     setSelRes(null);
     lastScannedContent.current[activeId] = "";
     if (suggestionsOn) {
       setTimeout(() => runFactCheck(next), 1500);
       setTimeout(() => generateSuggestions(activeId, next, notes), 2500);
     }
-    setTimeout(resize, 0);
   };
 
   const dismissSugg = id => {
@@ -1827,12 +1853,86 @@ ${currentContent}`,
     setShownSuggIds(prev => { const n = new Set(prev); n.delete(id); return n; });
   };
 
+  /* ── Save notes to a file on disk (File System Access API) ── */
+  const saveNotesToDisk = async () => {
+    if (!supportsFileAccess()) return;
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: "sunnyd-notes.json",
+        types: [{ description: "JSON", accept: { "application/json": [".json"] } }],
+      });
+      await setStoredFileHandle(handle);
+      await writeToFile(handle, notes, activeId);
+      fileHandleRef.current = handle;
+      setSavingToDisk(true);
+    } catch (e) {
+      if (e.name !== "AbortError") console.error("Save to disk:", e);
+    }
+  };
+
+  /* ── HTML → docx paragraphs helper ── */
+  const htmlToDocxParagraphs = (html) => {
+    if (!html) return [];
+    const isHtml = html.trimStart().startsWith("<");
+    if (!isHtml) {
+      // Plain text fallback
+      return html.split("\n").map(line =>
+        line.trim() === ""
+          ? new Paragraph({ text: "", spacing: { after: 80 } })
+          : new Paragraph({ children: [new TextRun({ text: line, size: 24, font: "Calibri" })], spacing: { after: 120 } })
+      );
+    }
+    const div = document.createElement("div");
+    div.innerHTML = html;
+    const paras = [];
+    const processInline = (node) => {
+      const runs = [];
+      node.childNodes.forEach(child => {
+        if (child.nodeType === Node.TEXT_NODE) {
+          if (child.textContent) runs.push(new TextRun({ text: child.textContent, size: 24, font: "Calibri" }));
+        } else if (child.tagName === "STRONG" || child.tagName === "B") {
+          runs.push(new TextRun({ text: child.textContent, bold: true, size: 24, font: "Calibri" }));
+        } else if (child.tagName === "EM" || child.tagName === "I") {
+          runs.push(new TextRun({ text: child.textContent, italics: true, size: 24, font: "Calibri" }));
+        } else if (child.tagName === "CODE") {
+          runs.push(new TextRun({ text: child.textContent, font: "Courier New", size: 22 }));
+        } else {
+          runs.push(new TextRun({ text: child.textContent, size: 24, font: "Calibri" }));
+        }
+      });
+      return runs;
+    };
+    div.childNodes.forEach(node => {
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const tag = node.tagName;
+      if (tag === "H1") {
+        paras.push(new Paragraph({ text: node.textContent, heading: HeadingLevel.HEADING_1, spacing: { after: 200 } }));
+      } else if (tag === "H2") {
+        paras.push(new Paragraph({ text: node.textContent, heading: HeadingLevel.HEADING_2, spacing: { after: 160 } }));
+      } else if (tag === "H3") {
+        paras.push(new Paragraph({ text: node.textContent, heading: HeadingLevel.HEADING_3, spacing: { after: 140 } }));
+      } else if (tag === "UL" || tag === "OL") {
+        node.querySelectorAll("li").forEach(li => {
+          paras.push(new Paragraph({ text: li.textContent, bullet: { level: 0 }, spacing: { after: 80 } }));
+        });
+      } else if (tag === "PRE" || tag === "CODE") {
+        paras.push(new Paragraph({ children: [new TextRun({ text: node.textContent, font: "Courier New", size: 22 })], spacing: { after: 120 } }));
+      } else {
+        const text = node.textContent?.trim();
+        if (!text) return;
+        const runs = processInline(node);
+        paras.push(new Paragraph({ children: runs.length ? runs : [new TextRun({ text, size: 24, font: "Calibri" })], spacing: { after: 120 } }));
+      }
+    });
+    return paras;
+  };
+
   /* ── Export notes to .docx ── */
   const exportToDocx = async (exportAll = false) => {
     const toExport = exportAll ? notes : notes.filter(n => n.id === activeId);
     const children = [];
 
-    toExport.forEach((note, ni) => {
+    toExport.forEach((n, ni) => {
       if (ni > 0) {
         children.push(new Paragraph({ text: "", spacing: { after: 200 } }));
         children.push(new Paragraph({
@@ -1842,22 +1942,11 @@ ${currentContent}`,
         }));
       }
       children.push(new Paragraph({
-        text: note.title || "Untitled",
+        text: n.title || "Untitled",
         heading: HeadingLevel.HEADING_1,
         spacing: { after: 200 },
       }));
-
-      const lines = (note.content || "").split("\n");
-      for (const line of lines) {
-        if (line.trim() === "") {
-          children.push(new Paragraph({ text: "", spacing: { after: 80 } }));
-        } else {
-          children.push(new Paragraph({
-            children: [new TextRun({ text: line, size: 24, font: "Calibri" })],
-            spacing: { after: 120 },
-          }));
-        }
-      }
+      children.push(...htmlToDocxParagraphs(n.content || ""));
     });
 
     const doc = new Document({
@@ -1877,31 +1966,20 @@ ${currentContent}`,
   const CARD_HEIGHT = 420;
 
   const getDockedCardPosition = useCallback((suggestion) => {
-    const hlLayer = hlRef.current;
     const editorRect = docColRef.current?.getBoundingClientRect();
+    const fallback = { top: 120, left: (editorRect?.right ?? 0) + 16 };
 
-    // Lecture append suggestions — position card next to the end-of-note marker
-    if (isAppendSugg(suggestion)) {
-      const marker = hlLayer?.querySelector("#lecture-append-marker");
-      if (marker && editorRect) {
-        const markerRect = marker.getBoundingClientRect();
-        const top = Math.min(markerRect.top, window.innerHeight - CARD_HEIGHT - 16);
-        return { top: Math.max(top, 80), left: editorRect.right + 16 };
-      }
-      return { top: 120, left: (editorRect?.right ?? 0) + 16 };
-    }
-
+    const editorDom = editorRef.current?.getEditorDom();
     const range = findSuggestionRange(content, suggestion);
-    if (!range) return { top: 120, left: (editorRect?.right ?? 0) + 16 };
+    if (!range || !editorDom || !editorRect) return fallback;
+
     const refIndex = range.start;
-    if (!hlLayer) return { top: 120, left: (editorRect?.right ?? 0) + 16 };
     const refLen = range.end - range.start;
-    const walker = document.createTreeWalker(hlLayer, NodeFilter.SHOW_TEXT);
-    let node, offset = 0, found = false, targetRect = null;
+    const walker = document.createTreeWalker(editorDom, NodeFilter.SHOW_TEXT);
+    let node, offset = 0, targetRect = null;
     while ((node = walker.nextNode())) {
       const len = node.textContent.length;
-      if (offset + len > refIndex && !found) {
-        found = true;
+      if (offset + len > refIndex) {
         const r = document.createRange();
         r.setStart(node, refIndex - offset);
         r.setEnd(node, Math.min(refIndex - offset + refLen, len));
@@ -1910,7 +1988,7 @@ ${currentContent}`,
       }
       offset += len;
     }
-    if (!targetRect || !editorRect) return { top: 120, left: editorRect.right + 16 };
+    if (!targetRect) return fallback;
     let cardLeft = editorRect.right + 16;
     if (cardLeft + CARD_WIDTH > window.innerWidth) cardLeft = window.innerWidth - CARD_WIDTH - 16;
     const cardTop = Math.max(10, Math.min(targetRect.top, window.innerHeight - CARD_HEIGHT - 10));
@@ -1938,40 +2016,7 @@ ${currentContent}`,
     return () => window.removeEventListener("keydown", onKey);
   }, [dockedCard, selRes]);
 
-  /* ── Weave overlay: measure textRef rect when applying ── */
-  useLayoutEffect(() => {
-    if (!applyingSugg) { setWeaveRect(null); return; }
-    const range = findSuggestionRange(content, applyingSugg);
-    const hl = hlRef.current;
-    const wrap = taWrapRef.current;
-    if (!range || !hl || !wrap) { setWeaveRect(null); return; }
-    const walker = document.createTreeWalker(hl, NodeFilter.SHOW_TEXT);
-    let node, offset = 0, startNode = null, startOff = 0, endNode = null, endOff = 0;
-    while ((node = walker.nextNode())) {
-      const len = node.textContent.length;
-      const nEnd = offset + len;
-      if (startNode == null && offset <= range.start && range.start < nEnd) {
-        startNode = node; startOff = range.start - offset;
-      }
-      if (endNode == null && offset < range.end && range.end <= nEnd) {
-        endNode = node; endOff = range.end - offset;
-        break;
-      }
-      offset = nEnd;
-    }
-    if (!startNode || !endNode) { setWeaveRect(null); return; }
-    const r = document.createRange();
-    r.setStart(startNode, startOff);
-    r.setEnd(endNode, endOff);
-    const targetRect = r.getBoundingClientRect();
-    const wrapRect = wrap.getBoundingClientRect();
-    setWeaveRect({
-      top: targetRect.top - wrapRect.top,
-      left: targetRect.left - wrapRect.left,
-      width: targetRect.width,
-      height: targetRect.height,
-    });
-  }, [applyingSugg, content]);
+  /* ── Weave overlay: removed (hl-layer replaced by Tiptap editor) ── */
 
   /* ── Remove stale suggestions when content changes (e.g. after applying) ── */
   useEffect(() => {
@@ -1991,7 +2036,6 @@ ${currentContent}`,
     const snapNotes = notes;
     const t1 = suggestionsOn ? setTimeout(() => runFactCheck(content), 2500) : null;
     const t3 = suggestionsOn ? setTimeout(() => generateSuggestions(activeId, content, snapNotes), 5000) : null;
-    setTimeout(resize, 50);
     return () => { if (t1) clearTimeout(t1); if (t3) clearTimeout(t3); };
   }, [activeId, apiKey, suggestionsOn]);
 
@@ -2017,36 +2061,50 @@ ${currentContent}`,
     try {
       const sugg = sortedSuggRef.current;
       const txt = contentRef.current;
-      const hl = hlRef.current;
       const panel = panelBodyRef.current;
-      if (!hl || !panel || sugg.length === 0) {
+      if (!panel || sugg.length === 0) {
         setSuggTops(prev => (Object.keys(prev).length === 0 ? prev : {}));
         return;
       }
-      const panelRect = panel.getBoundingClientRect();
+      // Use the editor DOM for text-position-to-pixel mapping
+      const editorDom = editorRef.current?.getEditorDom();
       const positions = {};
       for (const s of sugg) {
-        const range = findSuggestionRange(txt, s);
-        if (!range) continue;
-        const refIndex = range.start;
-        const walker = document.createTreeWalker(hl, NodeFilter.SHOW_TEXT);
-        let node, charOffset = 0;
+        if (!s.textRef) { positions[s.id] = null; continue; }
+        // Try to find the text in the editor's DOM
         let found = false;
-        while ((node = walker.nextNode())) {
-          const len = node.textContent.length;
-          if (charOffset + len > refIndex) {
-            const offsetInNode = Math.max(0, Math.min(refIndex - charOffset, len - 1));
-            const r = document.createRange();
-            r.setStart(node, offsetInNode);
-            r.setEnd(node, Math.min(offsetInNode + 1, len));
-            const rect = r.getBoundingClientRect();
-            positions[s.id] = rect.top - panelRect.top;
-            found = true;
-            break;
+        if (editorDom) {
+          const walker = document.createTreeWalker(editorDom, NodeFilter.SHOW_TEXT);
+          let node, charOffset = 0;
+          const refIndex = txt.indexOf(s.textRef);
+          if (refIndex !== -1) {
+            while ((node = walker.nextNode())) {
+              const len = node.textContent.length;
+              if (charOffset + len > refIndex) {
+                const offsetInNode = Math.max(0, Math.min(refIndex - charOffset, len - 1));
+                const r = document.createRange();
+                r.setStart(node, offsetInNode);
+                r.setEnd(node, Math.min(offsetInNode + 1, len));
+                const rect = r.getBoundingClientRect();
+                const panelRect = panel.getBoundingClientRect();
+                positions[s.id] = rect.top - panelRect.top;
+                found = true;
+                break;
+              }
+              charOffset += len;
+            }
           }
-          charOffset += len;
         }
-        if (!found) positions[s.id] = null;
+        if (!found) {
+          // Fallback: fraction-based positioning
+          const idx = txt.indexOf(s.textRef);
+          if (idx !== -1) {
+            const panelHeight = panel.clientHeight || 600;
+            positions[s.id] = Math.max(0, (idx / Math.max(txt.length, 1)) * Math.max(panelHeight, 200));
+          } else {
+            positions[s.id] = null;
+          }
+        }
       }
       const sorted = [...sugg].sort((a, b) => (positions[a.id] ?? 9999) - (positions[b.id] ?? 9999));
       for (let i = 1; i < sorted.length; i++) {
@@ -2077,16 +2135,13 @@ ${currentContent}`,
 
   useEffect(() => {
     const main = mainAreaRef.current;
-    const ta = taRef.current;
     const ann = annColRef.current;
-    if (!main && !ta && !ann) return;
+    if (!main && !ann) return;
     const onScroll = () => requestAnimationFrame(recalcSuggTops);
     main?.addEventListener("scroll", onScroll, { passive: true });
-    ta?.addEventListener("scroll", onScroll, { passive: true });
     ann?.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       main?.removeEventListener("scroll", onScroll);
-      ta?.removeEventListener("scroll", onScroll);
       ann?.removeEventListener("scroll", onScroll);
     };
   }, [recalcSuggTops]);
@@ -2321,7 +2376,18 @@ Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sente
               </div>
             ))}
             <div className="sb-footer">
-              <div className="sb-autosave">✓ Notes saved locally</div>
+              {savingToDisk ? (
+                <div className="sb-autosave sb-disk">✓ Saved to disk</div>
+              ) : (
+                <>
+                  <div className="sb-autosave">✓ Notes saved locally</div>
+                  {supportsFileAccess() && (
+                    <button type="button" className="sb-disk-btn" onClick={saveNotesToDisk}>
+                      Save to file on disk
+                    </button>
+                  )}
+                </>
+              )}
               <div className="sb-ttl">How it works</div>
               {[
                 ["Fact checks",  "Right panel — hover to highlight"],
@@ -2346,27 +2412,27 @@ Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sente
                   {activeSugg.length > 0 && <span className="ann-badge">{activeSugg.length} suggestions</span>}
                 </div>
                 <div className="divider" />
-                <div ref={taWrapRef} className="ta-wrap">
-                  <div ref={hlRef} className={`hl-layer${selRes ? " has-sel-preview" : ""}`} aria-hidden="true">{renderHL()}</div>
-                  <textarea ref={taRef} className="ta" value={content}
-                    readOnly={!!applyingSugg || !!selRes}
-                    onChange={handleChange} onKeyDown={handleKeyDown}
-                    onScroll={syncScroll}
-                    placeholder="Start writing — SunnyD will assist as you go." />
-                  {applyingSugg && weaveRect && (
-                    <div
-                      className="weave-overlay"
-                      style={{
-                        top: Math.max(0, weaveRect.top - 4),
-                        left: Math.max(0, weaveRect.left - 6),
-                        minWidth: Math.max(180, weaveRect.width + 12),
-                        minHeight: Math.max(40, weaveRect.height + 8),
-                      }}
-                    >
+                <div className="ta-wrap">
+                  <NoteEditor
+                    key={activeId}
+                    ref={editorRef}
+                    content={noteHtml}
+                    onChange={handleEditorChange}
+                    onKeyDown={handleKeyDown}
+                  />
+                  {applyingSugg && (
+                    <div className="weave-overlay weave-overlay-fixed">
                       <div className="weave-typing">
                         <TypeWriter text={((applyingSugg.apply || applyingSugg.detail) || "Weaving…").slice(0, 280)} speed={18} />
                         <span className="weave-cursor" />
                       </div>
+                    </div>
+                  )}
+                  {selRes && (
+                    <div className="sel-result-bar" onClick={e => e.stopPropagation()}>
+                      <span className="sel-result-expl">{selRes.explanation}</span>
+                      <button className="btn-fill sel-result-apply" onClick={weaveSelResult}>✓ Apply</button>
+                      <button className="btn-out" onClick={() => setSelRes(null)}>Dismiss</button>
                     </div>
                   )}
                 </div>
