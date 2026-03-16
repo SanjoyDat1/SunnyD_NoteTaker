@@ -91,6 +91,152 @@ async function ai(provider, apiKey, system, user, max = 900) {
   throw new Error("Unknown provider: " + provider);
 }
 
+/* ─── Semantic Search ────────────────────────────────────────────────────── */
+
+/* Call the active provider's embeddings API. Returns number[] or null. */
+async function embedText(text) {
+  try {
+    const provider = sessionStorage.getItem("sd_provider") || "openai";
+    const key = sessionStorage.getItem(`sd_key_${provider}`) || sessionStorage.getItem("sd_key") || "";
+    if (!key) return null;
+    if (provider === "claude") return null; // Anthropic has no embeddings API
+
+    const trimmed = text.slice(0, 8000);
+
+    if (provider === "openai") {
+      const r = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model: "text-embedding-3-small", input: trimmed }),
+      });
+      if (!r.ok) return null;
+      const data = await r.json();
+      return data.data?.[0]?.embedding ?? null;
+    }
+
+    if (provider === "gemini") {
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${encodeURIComponent(key)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "models/text-embedding-004",
+            content: { parts: [{ text: trimmed }] },
+          }),
+        }
+      );
+      if (!r.ok) return null;
+      const data = await r.json();
+      return data.embedding?.values ?? null;
+    }
+
+    return null;
+  } catch { return null; }
+}
+
+function cosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0, magA = 0, magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot  += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB) + 1e-10);
+}
+
+function keywordScore(noteText, query) {
+  const words = query.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return 0;
+  const lower = noteText.toLowerCase();
+  const hits = words.filter(w => lower.includes(w.toLowerCase())).length;
+  return hits / words.length;
+}
+
+function simpleHash(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  }
+  return h;
+}
+
+/* ── Embedding localStorage helpers ── */
+const LS_EMBED_KEY = "sd_embeddings_v1";
+
+function loadEmbeddings() {
+  try { return JSON.parse(localStorage.getItem(LS_EMBED_KEY) || "{}"); } catch { return {}; }
+}
+
+function saveEmbedding(noteId, vector, contentHash) {
+  try {
+    const embeddings = loadEmbeddings();
+    embeddings[noteId] = { vector, hash: contentHash };
+    localStorage.setItem(LS_EMBED_KEY, JSON.stringify(embeddings));
+  } catch (e) {
+    if (e?.name === "QuotaExceededError") console.warn("Search index full — embedding not saved.");
+  }
+}
+
+function deleteEmbedding(noteId) {
+  try {
+    const embeddings = loadEmbeddings();
+    delete embeddings[noteId];
+    localStorage.setItem(LS_EMBED_KEY, JSON.stringify(embeddings));
+  } catch {}
+}
+
+function getExcerpt(content, query) {
+  const plain = content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const words = query.split(/\s+/).filter(Boolean);
+  const lower = plain.toLowerCase();
+  let matchIdx = -1;
+  for (const w of words) {
+    const idx = lower.indexOf(w.toLowerCase());
+    if (idx !== -1) { matchIdx = idx; break; }
+  }
+  const start = matchIdx !== -1 ? Math.max(0, matchIdx - 60) : 0;
+  const end   = Math.min(plain.length, start + 220);
+  let excerpt = plain.slice(start, end);
+  const escaped = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  if (escaped) {
+    excerpt = excerpt.replace(new RegExp(`(${escaped})`, "gi"), "<mark>$1</mark>");
+  }
+  if (start > 0) excerpt = "…" + excerpt;
+  if (end < plain.length) excerpt = excerpt + "…";
+  return excerpt;
+}
+
+async function searchNotes(query, notes) {
+  const provider = sessionStorage.getItem("sd_provider") || "openai";
+  const embeddings = loadEmbeddings();
+
+  if (provider !== "claude") {
+    const queryVec = await embedText(query);
+    if (!queryVec) return [];
+    return notes
+      .map(note => ({
+        note,
+        score: cosineSimilarity(queryVec, embeddings[note.id]?.vector ?? null),
+        excerpt: getExcerpt(note.content, query),
+      }))
+      .filter(r => r.score > 0.3)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+  }
+
+  // Claude fallback: keyword search
+  return notes
+    .map(note => {
+      const plainText = note.content.replace(/<[^>]+>/g, " ");
+      return { note, score: keywordScore(plainText, query), excerpt: getExcerpt(note.content, query) };
+    })
+    .filter(r => r.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+}
+
 /* ─── Seed ───────────────────────────────────────────────────────────────── */
 /* Convert HTML to plain text for AI calls */
 function htmlToText(html) {
@@ -497,8 +643,12 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 
 /* ── Notes sidebar ── */
 .notes-sb{width:170px;flex-shrink:0;background:var(--paper);border-right:1px solid var(--rule);display:flex;flex-direction:column;padding:11px 8px;overflow-y:auto;}
-.new-btn{width:100%;padding:8px 10px;margin-bottom:9px;background:var(--ink);color:var(--paper);border:none;border-radius:5px;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;cursor:pointer;transition:opacity .18s;}
+.sb-top-row{display:flex;gap:6px;margin-bottom:9px;}
+.new-btn{flex:1;padding:8px 10px;background:var(--ink);color:var(--paper);border:none;border-radius:5px;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;cursor:pointer;transition:opacity .18s;}
 .new-btn:hover{opacity:.78;}
+.search-btn{padding:8px 12px;background:var(--ink);color:var(--paper);border:none;border-radius:5px;font-family:'DM Sans',sans-serif;font-size:15px;cursor:pointer;transition:opacity .18s;line-height:1;}
+.search-btn:hover{opacity:.78;}
+mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2px;}
 .note-row{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:5px;cursor:pointer;transition:background .12s;margin-bottom:1px;}
 .note-row:hover{background:rgba(50,35,15,.05);}
 .note-row.on{background:rgba(50,35,15,.09);}
@@ -911,6 +1061,133 @@ const NoteEditor = forwardRef(function NoteEditor({ content, onChange, onKeyDown
   );
 });
 
+/* ─── SearchPalette ──────────────────────────────────────────────────────── */
+function SearchPalette({ notes, onSelectNote, onClose }) {
+  const [query, setQuery]           = useState("");
+  const [results, setResults]       = useState([]);
+  const [loading, setLoading]       = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [hovered, setHovered]       = useState(null);
+  const inputRef = useRef(null);
+  const searchTimer = useRef(null);
+
+  // Focus input + backfill missing embeddings on mount
+  useEffect(() => {
+    inputRef.current?.focus();
+    (async () => {
+      const embeddings = loadEmbeddings();
+      const missing = notes.filter(n => !embeddings[n.id] && (n.content || "").trim().length > 50);
+      if (missing.length === 0) return;
+      setBackfilling(true);
+      for (const note of missing) {
+        const plain = note.content.replace(/<[^>]+>/g, " ").trim();
+        const vec = await embedText(plain);
+        if (vec) saveEmbedding(note.id, vec, simpleHash(plain));
+        await new Promise(r => setTimeout(r, 150));
+      }
+      setBackfilling(false);
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Debounced search on query change
+  useEffect(() => {
+    if (!query.trim()) { setResults([]); return; }
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await searchNotes(query, notes);
+        setResults(res);
+      } catch { setResults([]); }
+      setLoading(false);
+    }, 350);
+    return () => clearTimeout(searchTimer.current);
+  }, [query]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const statusLabel = loading ? "searching…" : backfilling ? "indexing…" : "";
+
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, zIndex: 9999,
+        background: "rgba(0,0,0,0.45)",
+        display: "flex", alignItems: "flex-start", justifyContent: "center",
+        paddingTop: "15vh",
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: "var(--bg, #fff)",
+          borderRadius: 12,
+          width: "100%", maxWidth: 560,
+          overflow: "hidden",
+          boxShadow: "0 24px 60px rgba(0,0,0,0.22)",
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Input row */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, borderBottom: "1px solid rgba(0,0,0,0.08)", padding: "12px 16px" }}>
+          <span style={{ fontSize: 18, opacity: 0.45, lineHeight: 1 }}>⌕</span>
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === "Escape") onClose(); }}
+            placeholder="Search notes…"
+            style={{ border: "none", outline: "none", flex: 1, fontSize: 15, background: "transparent", fontFamily: "inherit", color: "inherit" }}
+          />
+          {statusLabel && (
+            <span style={{ fontSize: 12, opacity: 0.5, whiteSpace: "nowrap" }}>{statusLabel}</span>
+          )}
+        </div>
+
+        {/* Results */}
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, maxHeight: 360, overflowY: "auto" }}>
+          {results.map(({ note, score, excerpt }) => (
+            <li
+              key={note.id}
+              style={{
+                padding: "12px 16px",
+                cursor: "pointer",
+                borderBottom: "1px solid rgba(0,0,0,0.05)",
+                background: hovered === note.id ? "rgba(0,0,0,0.04)" : "transparent",
+                transition: "background 0.1s",
+              }}
+              onMouseEnter={() => setHovered(note.id)}
+              onMouseLeave={() => setHovered(null)}
+              onClick={() => { onSelectNote(note.id); onClose(); }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontWeight: 500, fontSize: 14 }}>{note.title || "Untitled"}</span>
+                <span style={{ fontSize: 11, opacity: 0.4 }}>{Math.round(score * 100)}% match</span>
+              </div>
+              <div
+                style={{ fontSize: 13, opacity: 0.6, lineHeight: 1.5, marginTop: 4 }}
+                dangerouslySetInnerHTML={{ __html: excerpt }}
+              />
+            </li>
+          ))}
+        </ul>
+
+        {/* Empty state */}
+        {query.trim() && !loading && results.length === 0 && (
+          <div style={{ textAlign: "center", fontSize: 14, opacity: 0.5, padding: "20px 16px" }}>
+            No matching notes
+          </div>
+        )}
+
+        {/* Footer */}
+        {!query.trim() && (
+          <div style={{ fontSize: 12, opacity: 0.4, padding: "10px 16px 12px" }}>
+            {notes.length} note{notes.length !== 1 ? "s" : ""} indexed
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function KeyScreen({ onSave }) {
   const [provider, setProvider] = useState(() => { try { return sessionStorage.getItem("sd_provider") || "openai"; } catch { return "openai"; } });
   const [val, setVal] = useState(() => { try { return sessionStorage.getItem(`sd_key_${sessionStorage.getItem("sd_provider") || "openai"}`) || ""; } catch { return ""; } });
@@ -1032,6 +1309,7 @@ export default function SunnyDNotes() {
   const [lectureQRefreshing, setLectureQRefreshing] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [savingToDisk, setSavingToDisk] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const { transcript, interimTranscript, finalTranscript, listening, resetTranscript, browserSupportsSpeechRecognition } = useSpeechRecognition({ clearTranscriptOnListen: false });
 
@@ -1149,7 +1427,23 @@ export default function SunnyDNotes() {
   }, []);
 
   /* ── Persist notes to localStorage on every change; if disk file is active, write there too (debounced) ── */
-  useEffect(() => { saveNotes(notes); }, [notes]);
+  useEffect(() => {
+    saveNotes(notes);
+    // Generate/update embedding for the active note if content changed
+    const currentNote = notes.find(n => n.id === activeId);
+    if (currentNote) {
+      const plainText = htmlToText(currentNote.content).trim();
+      if (plainText.length > 50) {
+        const hash = simpleHash(plainText);
+        const existing = loadEmbeddings()[activeId];
+        if (!existing || existing.hash !== hash) {
+          embedText(plainText)
+            .then(vector => { if (vector) saveEmbedding(activeId, vector, hash); })
+            .catch(() => {});
+        }
+      }
+    }
+  }, [notes]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { saveActiveId(activeId); }, [activeId]);
   useEffect(() => {
     const handle = fileHandleRef.current;
@@ -2016,6 +2310,20 @@ ${currentContent}`,
     return () => window.removeEventListener("keydown", onKey);
   }, [dockedCard, selRes]);
 
+  /* ── Global ⌘K / Ctrl+K to toggle search palette ── */
+  useEffect(() => {
+    const isMac = navigator.platform.toUpperCase().includes("MAC");
+    const onKey = e => {
+      if ((isMac ? e.metaKey : e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setSearchOpen(prev => !prev);
+      }
+      if (e.key === "Escape") setSearchOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   /* ── Weave overlay: removed (hl-layer replaced by Tiptap editor) ── */
 
   /* ── Remove stale suggestions when content changes (e.g. after applying) ── */
@@ -2363,11 +2671,14 @@ Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sente
 
           {/* Notes sidebar */}
           <aside className="notes-sb">
-            <button className="new-btn" onClick={() => {
-              const id = Date.now();
-              setNotes(p => [...p, { id, title: "Untitled", content: "" }]);
-              setActiveId(id); setPop(null); setGhost(null); setSelRes(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
-            }}>+ New Note</button>
+            <div className="sb-top-row">
+              <button className="new-btn" onClick={() => {
+                const id = Date.now();
+                setNotes(p => [...p, { id, title: "Untitled", content: "" }]);
+                setActiveId(id); setPop(null); setGhost(null); setSelRes(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
+              }}>+ New Note</button>
+              <button className="search-btn" title="Search notes (⌘K)" onClick={() => setSearchOpen(true)}>⌕</button>
+            </div>
             {notes.map(n => (
               <div key={n.id} className={`note-row${n.id === activeId ? " on" : ""}`}
                 onClick={() => { setActiveId(n.id); setGhost(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); }}>
@@ -2558,6 +2869,14 @@ Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sente
           </div>
         )}
       </div>
+
+      {searchOpen && (
+        <SearchPalette
+          notes={notes}
+          onSelectNote={id => { setActiveId(id); setGhost(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); }}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
     </>
   );
 }
