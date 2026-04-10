@@ -1420,6 +1420,14 @@ const NoteEditor = forwardRef(function NoteEditor({ content, onChange, onKeyDown
       if (!editor) return;
       editor.view.dispatch(editor.state.tr.setMeta(insertedHlKey, null));
     },
+    /* Scroll the editor viewport so that the first occurrence of searchText is visible */
+    scrollToText(searchText) {
+      if (!editor || !searchText) return false;
+      const range = findTextInDoc(editor.state.doc, searchText.trim().slice(0, 80));
+      if (!range) return false;
+      editor.chain().setTextSelection(range.from).scrollIntoView().run();
+      return true;
+    },
   }), [editor]);
 
   // Sync content when note changes (note switching)
@@ -1997,15 +2005,64 @@ ${noteContext.slice(0, 1200)}`,
 
   /* ── Lecture suggestions: find transcript content missing from the note ── */
   /* ── Add a Q&A to the note as structured content ── */
+  /* ── Find the best paragraph in the notes to insert a Q&A after ── */
+  function findBestAnchor(questionText, plainContent) {
+    if (!plainContent || !plainContent.trim()) return null;
+    // Common stop-words to ignore when matching
+    const stop = new Set([
+      'what','when','where','which','who','how','why','does','did','do',
+      'the','and','for','that','this','with','are','was','were','is',
+      'in','of','to','a','an','it','its','be','as','at','by','from',
+      'have','has','had','not','but','about','can','will','would','should',
+    ]);
+    const keywords = questionText.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 3 && !stop.has(w));
+    if (keywords.length === 0) return null;
+
+    // Score each non-trivial line by how many question keywords it contains
+    const lines = plainContent.split(/\n+/).map(l => l.trim()).filter(l => l.length > 15 && l.length < 400);
+    let best = { score: 0, line: null };
+    for (const line of lines) {
+      const lower = line.toLowerCase();
+      const score = keywords.reduce((acc, kw) => acc + (lower.includes(kw) ? 1 : 0), 0);
+      if (score > best.score) best = { score, line };
+    }
+    // Only anchor if at least one keyword matched; trim to 80 chars for findTextInDoc
+    return best.score > 0 ? best.line.slice(0, 80) : null;
+  }
+
+  /* ── Build the Q&A HTML block with proper spacing and structure ── */
+  function buildQAHtml(q) {
+    const safeQ = q.text.trim();
+    // Convert answer markdown to HTML, then label the first paragraph "A:"
+    const answerMd = (q.answer || '').trim() || '(no answer yet)';
+    const answerConverted = mdToHtml(answerMd);
+    // Inject the A: label at the very start of the first <p>
+    const labeledAnswer = answerConverted.replace(/^<p>/, '<p><strong>A:</strong>\u00a0');
+    // Wrap: blank spacer → Q → A block(s) → blank spacer so it never mashes against nearby content
+    return `<p></p><p><strong>Q:</strong>\u00a0${safeQ}</p>${labeledAnswer}<p></p>`;
+  }
+
   function addQuestionToNotes(q) {
-    const html = `<p><strong>Q:</strong> <em>${q.text}</em></p>${mdToHtml(q.answer)}`;
-    editorRef.current?.insertAfterText(
-      content.trim().slice(-60), // anchor near end of note
-      html
-    ) || editorRef.current?.appendContent(html);
+    const html = buildQAHtml(q);
+
+    // Try to find the most relevant spot in the notes based on question keywords
+    const anchor = findBestAnchor(q.text, content);
+    let inserted = false;
+    if (anchor) inserted = !!(editorRef.current?.insertAfterText(anchor, html));
+    if (!inserted) editorRef.current?.appendContent(html);
+
     setNotedQIds(prev => new Set([...prev, q.id]));
-    // Flash the newly added Q&A
-    setTimeout(() => editorRef.current?.setInsertedHighlight(q.answer.slice(0, 80)), 150);
+
+    // Scroll to the inserted Q line and flash it orange
+    setTimeout(() => {
+      const scrollKey = `Q:\u00a0${q.text.trim().slice(0, 50)}`;
+      editorRef.current?.scrollToText(scrollKey) ||
+        editorRef.current?.scrollToText(q.text.trim().slice(0, 40));
+      editorRef.current?.setInsertedHighlight(q.text.trim().slice(0, 50));
+    }, 150);
     setTimeout(() => editorRef.current?.clearInsertedHighlight(), 9000);
   }
 
