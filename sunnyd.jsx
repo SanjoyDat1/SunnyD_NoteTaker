@@ -1143,18 +1143,20 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 }
 .note-meta-edit-btn:hover{color:var(--ink);background:var(--paper);}
 
-/* ── Selection toolbar (compact dark floating bar) ── */
+/* ── Selection toolbar (compact dark floating bar, two-row) ── */
 .sel-toolbar{
   position:fixed;z-index:9999;
-  display:inline-flex;align-items:center;gap:1px;
-  background:#1A1410;border-radius:9px;
+  display:inline-flex;flex-direction:column;align-items:stretch;gap:0;
+  background:#1A1410;border-radius:10px;
   box-shadow:0 6px 24px rgba(0,0,0,.28),0 2px 8px rgba(0,0,0,.18);
   padding:4px;
   animation:selToolIn .15s cubic-bezier(.34,1.56,.64,1) forwards;
   transform:translateX(-50%);
-  user-select:none;
+  user-select:none;min-width:220px;
 }
 @keyframes selToolIn{from{opacity:0;transform:translateX(-50%) scale(.88)}to{opacity:1;transform:translateX(-50%) scale(1)}}
+/* AI action row */
+.sel-toolbar-acts{display:flex;align-items:center;gap:1px;}
 .sel-toolbar-btn{
   display:flex;align-items:center;gap:5px;
   padding:5px 11px;border-radius:6px;
@@ -1166,6 +1168,21 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .sel-toolbar-btn:hover{background:rgba(255,255,255,.14);color:#fff;}
 .sel-toolbar-btn-ic{font-size:11px;opacity:.7;}
 .sel-toolbar-sep{width:1px;height:16px;background:rgba(255,255,255,.14);margin:0 2px;flex-shrink:0;}
+/* Horizontal divider between AI row and format row */
+.sel-toolbar-sep-h{height:1px;background:rgba(255,255,255,.1);margin:3px 2px;}
+/* Format button row */
+.sel-toolbar-fmts{display:flex;align-items:center;justify-content:center;gap:1px;padding:1px 2px;}
+.sel-toolbar-fmt-btn{
+  width:30px;height:26px;
+  display:flex;align-items:center;justify-content:center;
+  border-radius:5px;background:none;border:none;
+  color:rgba(255,255,255,.65);
+  cursor:pointer;transition:background .1s,color .1s;
+  flex-shrink:0;
+}
+.sel-toolbar-fmt-btn:hover{background:rgba(255,255,255,.14);color:#fff;}
+.sel-toolbar-fmt-btn.fmt-active{background:rgba(255,255,255,.22);color:#fff;}
+.sel-toolbar-fmt-sep{width:1px;height:14px;background:rgba(255,255,255,.12);margin:0 2px;flex-shrink:0;}
 /* Thinking pill — replaces toolbar while AI works */
 .sel-thinking-pill{
   position:fixed;z-index:9999;
@@ -1521,6 +1538,31 @@ const NoteEditor = forwardRef(function NoteEditor({ content, onChange, onKeyDown
     clearInsertedHighlight() {
       if (!editor) return;
       editor.view.dispatch(editor.state.tr.setMeta(insertedHlKey, null));
+    },
+    /* Apply a format (bold/italic/h1/h2/bulletList/code) to the current selection */
+    applyFormat(type) {
+      if (!editor) return;
+      const map = {
+        bold:       () => editor.chain().focus().toggleBold().run(),
+        italic:     () => editor.chain().focus().toggleItalic().run(),
+        h1:         () => editor.chain().focus().toggleHeading({ level: 1 }).run(),
+        h2:         () => editor.chain().focus().toggleHeading({ level: 2 }).run(),
+        bulletList: () => editor.chain().focus().toggleBulletList().run(),
+        code:       () => editor.chain().focus().toggleCode().run(),
+      };
+      map[type]?.();
+    },
+    /* Return which marks/nodes are active at the current selection */
+    getFormatState() {
+      if (!editor) return {};
+      return {
+        bold:       editor.isActive('bold'),
+        italic:     editor.isActive('italic'),
+        h1:         editor.isActive('heading', { level: 1 }),
+        h2:         editor.isActive('heading', { level: 2 }),
+        bulletList: editor.isActive('bulletList'),
+        code:       editor.isActive('code'),
+      };
     },
     /* Scroll the editor viewport so that the first occurrence of searchText is visible */
     scrollToText(searchText) {
@@ -2686,12 +2728,13 @@ If the fragment could already be a complete sentence (they may have just forgott
       const end = start !== -1 ? start + selectedText.length : -1;
       // Use the actual selection rect for precise positioning; fall back to mouse pos
       const rect = editorRef.current?.getSelectionRect() || null;
+      const fmt  = editorRef.current?.getFormatState()    || {};
       const anchorX = rect ? Math.round((rect.left + rect.right) / 2) : mouseX;
       // Place toolbar just above the selection; if near viewport top, place below
       const anchorY = rect
         ? (rect.top < 80 ? rect.bottom + 10 : rect.top - 10)
         : (mouseY < 80 ? mouseY + 10 : mouseY - 10);
-      setSelMenu({ text: selectedText, start, end, x: anchorX, y: anchorY, rect, below: (rect ? rect.top < 80 : mouseY < 80) });
+      setSelMenu({ text: selectedText, start, end, x: anchorX, y: anchorY, rect, below: (rect ? rect.top < 80 : mouseY < 80), fmt });
     }, 25);
   };
 
@@ -3750,20 +3793,56 @@ Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
             className="sel-toolbar"
             style={{
               left: selMenu.x,
-              // below=true means selection is near top → place toolbar below
-              top: selMenu.below ? selMenu.y : Math.max(8, selMenu.y - 40),
+              top: selMenu.below ? selMenu.y : Math.max(8, selMenu.y - 72),
             }}
             onClick={e => e.stopPropagation()}
           >
-            {SEL_ACTS.map(({ key, icon, label }, i) => (
-              <React.Fragment key={key}>
-                {i > 0 && <div className="sel-toolbar-sep" />}
-                <button className="sel-toolbar-btn" onClick={() => handleSelAction(key)}>
-                  <span className="sel-toolbar-btn-ic">{icon}</span>
-                  {label}
-                </button>
-              </React.Fragment>
-            ))}
+            {/* Row 1 — AI actions */}
+            <div className="sel-toolbar-acts">
+              {SEL_ACTS.map(({ key, icon, label }, i) => (
+                <React.Fragment key={key}>
+                  {i > 0 && <div className="sel-toolbar-sep" />}
+                  <button className="sel-toolbar-btn" onClick={() => handleSelAction(key)}>
+                    <span className="sel-toolbar-btn-ic">{icon}</span>
+                    {label}
+                  </button>
+                </React.Fragment>
+              ))}
+            </div>
+
+            {/* Divider */}
+            <div className="sel-toolbar-sep-h" />
+
+            {/* Row 2 — Text formatting */}
+            <div className="sel-toolbar-fmts">
+              {[
+                { type: 'bold',       content: <strong style={{fontSize:12}}>B</strong>,  title: 'Bold' },
+                { type: 'italic',     content: <em    style={{fontSize:12,fontFamily:'Georgia,serif'}}>I</em>, title: 'Italic' },
+                null, // separator
+                { type: 'h1',         content: <span  style={{fontSize:10,fontWeight:800,letterSpacing:'-.02em'}}>H1</span>, title: 'Heading 1' },
+                { type: 'h2',         content: <span  style={{fontSize:10,fontWeight:800,letterSpacing:'-.02em'}}>H2</span>, title: 'Heading 2' },
+                null,
+                { type: 'bulletList', content: <span  style={{fontSize:14,lineHeight:1}}>≡</span>, title: 'Bullet list' },
+                { type: 'code',       content: <span  style={{fontSize:10,fontFamily:'monospace',letterSpacing:'-.02em'}}>&lt;/&gt;</span>, title: 'Code' },
+              ].map((item, idx) =>
+                item === null
+                  ? <div key={`fsep-${idx}`} className="sel-toolbar-fmt-sep" />
+                  : (
+                    <button
+                      key={item.type}
+                      className={`sel-toolbar-fmt-btn${selMenu.fmt?.[item.type] ? ' fmt-active' : ''}`}
+                      title={item.title}
+                      onMouseDown={e => e.preventDefault()} // keep editor selection alive
+                      onClick={() => {
+                        editorRef.current?.applyFormat(item.type);
+                        setSelMenu(p => p ? { ...p, fmt: { ...p.fmt, [item.type]: !p.fmt?.[item.type] } } : p);
+                      }}
+                    >
+                      {item.content}
+                    </button>
+                  )
+              )}
+            </div>
           </div>
         )}
 
