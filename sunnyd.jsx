@@ -710,9 +710,38 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .lecture-q-card-hdr{padding:10px 14px;background:linear-gradient(135deg,#F7F2FF 0%,rgba(248,244,237,.9) 100%);border-bottom:1px solid rgba(94,56,160,.15);display:flex;align-items:center;justify-content:space-between;}
 .lecture-q-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#5E38A0;}
 .lecture-q-question{font-family:'DM Sans',sans-serif;font-size:13px;color:var(--ink);font-weight:500;padding:13px 16px 0;line-height:1.55;font-style:italic;border-left:3px solid rgba(94,56,160,.35);margin:12px 16px 0;padding:8px 10px;background:rgba(94,56,160,.04);border-radius:0 5px 5px 0;}
-.lecture-q-answer{font-family:'DM Sans',sans-serif;font-size:13.5px;line-height:1.72;color:var(--ink2);padding:12px 16px 14px;font-weight:400;}
+.lecture-q-answer{
+  font-family:'DM Sans',sans-serif;font-size:13.5px;line-height:1.72;color:var(--ink2);
+  padding:12px 16px 14px;font-weight:400;
+  overflow-y:auto;
+  transition:max-height .35s cubic-bezier(.22,1,.36,1);
+}
+.lecture-q-answer.compact{max-height:140px;}
+.lecture-q-answer.expanded{max-height:480px;}
+/* Rich-text rendering inside the answer (from mdToHtml) */
+.lecture-q-answer p{margin:.25rem 0;}
+.lecture-q-answer strong{font-weight:600;color:var(--ink);}
+.lecture-q-answer em{font-style:italic;}
+.lecture-q-answer h1,.lecture-q-answer h2,.lecture-q-answer h3{
+  font-weight:700;color:var(--ink);margin:.7rem 0 .25rem;font-size:13.5px;
+}
+.lecture-q-answer h2{font-size:13px;color:#5E38A0;}
+.lecture-q-answer ul,.lecture-q-answer ol{padding-left:1.3rem;margin:.35rem 0;}
+.lecture-q-answer li{margin:.15rem 0;}
+.lecture-q-answer code{font-family:monospace;font-size:12px;background:rgba(0,0,0,.06);padding:1px 5px;border-radius:3px;}
+.lecture-q-answer blockquote{border-left:3px solid rgba(94,56,160,.35);margin:.5rem 0;padding:.3rem .8rem;color:var(--ink3);font-style:italic;}
 .lecture-q-loading{display:flex;align-items:center;gap:8px;padding:16px;color:var(--ink3);font-size:12px;font-weight:500;}
-.lecture-q-btns{padding:10px 14px;background:var(--paper);border-top:1px solid var(--rule);display:flex;gap:7px;align-items:center;}
+.lecture-q-btns{padding:10px 14px;background:var(--paper);border-top:1px solid var(--rule);display:flex;gap:7px;align-items:center;flex-wrap:wrap;}
+/* Expand button */
+.lecture-q-expand-btn{
+  flex-shrink:0;
+  padding:6px 11px;background:linear-gradient(135deg,rgba(94,56,160,.12),rgba(94,56,160,.18));
+  color:#5E38A0;border:1px solid rgba(94,56,160,.28);border-radius:7px;
+  font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;
+  cursor:pointer;transition:all .15s;letter-spacing:.01em;white-space:nowrap;
+}
+.lecture-q-expand-btn:hover{background:linear-gradient(135deg,rgba(94,56,160,.2),rgba(94,56,160,.28));border-color:rgba(94,56,160,.5);}
+.lecture-q-expand-btn.active{background:linear-gradient(135deg,#6B3EB8,#5E38A0);color:#fff;border-color:transparent;}
 .lecture-q-add-btn{flex:1;padding:7px 12px;background:linear-gradient(135deg,#6B3EB8,#5E38A0);color:#fff;border:none;border-radius:7px;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;cursor:pointer;transition:opacity .15s,transform .15s;letter-spacing:.01em;}
 .lecture-q-add-btn:hover{opacity:.88;transform:translateY(-1px);}
 .lecture-q-add-btn.noted{background:var(--green);}
@@ -1705,6 +1734,7 @@ export default function SunnyDNotes() {
   const [lectureQAdded,  setLectureQAdded]  = useState(false);
   const [lectureQRefreshing, setLectureQRefreshing] = useState(false);
   const [lectureQGenerating, setLectureQGenerating] = useState(false); // auto-generating missing answer
+  const [lectureQExpanding,  setLectureQExpanding]  = useState(false); // generating long expanded answer
   const [notedQIds, setNotedQIds] = useState(new Set()); // Q IDs added to notes
   const [lectureSecs, setLectureSecs] = useState(0); // session duration counter
   const lectureTimerRef = useRef(null);
@@ -1954,6 +1984,48 @@ Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
       .catch(() => {})
       .finally(() => setLectureQGenerating(false));
   }, [activeLectureQ?.q?.id]); // only re-run when a different question is opened
+
+  /* ── Expand a lecture Q into a long, well-structured answer ── */
+  async function expandLectureAnswer(q) {
+    const qId = q.id;
+    setLectureQExpanding(true);
+    try {
+      const noteContext = notes.map(n => `[${n.title}]:\n${htmlToText(n.content).slice(0, 600)}`).join("\n\n");
+      const transcript  = finalTranscript || "";
+      const raw = await ai(
+        llmProvider, apiKey,
+        `You are SunnyD, an expert educational assistant helping a student deepen their understanding during a live lecture.
+The student wants a DETAILED, well-structured answer they can use to engage confidently in class.
+
+Return ONLY valid JSON (no markdown wrapper): {"answer":"<your full answer in markdown>"}
+
+Your answer MUST:
+- Be thorough (4-10 sentences or more, use paragraphs as needed)
+- Use markdown formatting to improve clarity:
+    • ## or ### for section headers when the answer covers multiple aspects
+    • **bold** for key terms or important concepts
+    • - bullet lists for enumerated points or examples
+    • > blockquote for a key takeaway or definition
+- Ground your answer in the student's notes and lecture context where possible
+- End with a brief "**Key takeaway:**" line the student can reference quickly`,
+        `Question: "${q.text}"
+
+Student notes:
+${noteContext.slice(0, 2000)}
+
+Recent lecture transcript:
+"${transcript.slice(-800)}"`,
+        900
+      );
+      const m = raw.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
+      const parsed = m ? (() => { try { return JSON.parse(m[0]); } catch { return null; } })() : null;
+      const expandedAnswer = parsed?.answer?.trim() || q.answer;
+      // Mark the question as expanded and store the long answer under expandedAnswer
+      setLectureQs(prev => prev.map(x => x.id === qId ? { ...x, expandedAnswer } : x));
+      setActiveLectureQ(prev => prev?.q.id === qId ? { ...prev, q: { ...prev.q, expandedAnswer } } : prev);
+    } catch {}
+    finally { setLectureQExpanding(false); }
+  }
 
   async function detectLectureQuestions(currentTranscript) {
     const newText = currentTranscript.slice(scannedTranscriptRef.current.length).trim();
@@ -3213,48 +3285,91 @@ Return the rewritten passage only:`;
         {/* Lecture question answer card */}
         {activeLectureQ && (() => {
           const q = activeLectureQ.q;
-          const isNoted = notedQIds.has(q.id);
-          // Smart positioning: prefer below-right of click, but keep fully on screen
-          const cardW = 370, cardH = 280;
+          const isNoted    = notedQIds.has(q.id);
+          const isExpanded = !!(q.expandedAnswer);
+          // Display the expanded answer if available, otherwise the short one
+          const displayAnswer = isExpanded ? q.expandedAnswer : q.answer;
+
+          // Smart positioning: prefer below-right of click, keep fully on screen
+          const cardW  = 390;
+          // Card height grows when expanded; use a loose estimate for initial placement only
+          const cardH  = isExpanded ? 560 : 300;
           const cardLeft = Math.max(12, Math.min(activeLectureQ.x - 40, window.innerWidth - cardW - 12));
           const cardTop  = activeLectureQ.y + 16 + cardH > window.innerHeight
             ? Math.max(10, activeLectureQ.y - cardH - 8)
             : activeLectureQ.y + 16;
+
           return (
             <div
               className="lecture-q-card"
-              style={{ top: cardTop, left: cardLeft }}
+              style={{ top: cardTop, left: cardLeft, width: cardW }}
               onClick={e => e.stopPropagation()}
             >
+              {/* Header */}
               <div className="lecture-q-card-hdr">
-                <span className="lecture-q-badge">{isNoted ? "✓ Added to notes" : "Suggested response"}</span>
-                <button className="x-btn" onClick={() => { setActiveLectureQ(null); setLectureQCopied(false); setLectureQAdded(false); }}>×</button>
+                <span className="lecture-q-badge">
+                  {isNoted ? "✓ Added to notes" : isExpanded ? "⊕ Detailed response" : "Suggested response"}
+                </span>
+                <button className="x-btn" onClick={() => {
+                  setActiveLectureQ(null);
+                  setLectureQCopied(false);
+                  setLectureQAdded(false);
+                  setLectureQExpanding(false);
+                }}>×</button>
               </div>
 
               {/* Question quote */}
               <div className="lecture-q-question">{q.text}</div>
 
-              {/* Answer / loading */}
-              {(lectureQRefreshing || lectureQGenerating) ? (
+              {/* Answer / loading states */}
+              {(lectureQRefreshing || lectureQGenerating || lectureQExpanding) ? (
                 <div className="lecture-q-loading">
                   <ThinkDots />
-                  <span>{lectureQRefreshing ? "Regenerating…" : "Drafting response…"}</span>
+                  <span>
+                    {lectureQRefreshing  ? "Regenerating…"
+                     : lectureQExpanding ? "Expanding response…"
+                     :                    "Drafting response…"}
+                  </span>
                 </div>
-              ) : q.answer ? (
+              ) : displayAnswer ? (
                 <>
-                  <div className="lecture-q-answer">{q.answer}</div>
+                  {/* Answer body — compact or expanded, renders markdown as HTML */}
+                  <div
+                    className={`lecture-q-answer ${isExpanded ? "expanded" : "compact"}`}
+                    dangerouslySetInnerHTML={{ __html: mdToHtml(displayAnswer) }}
+                  />
+
+                  {/* Action bar */}
                   <div className="lecture-q-btns">
-                    {/* Primary: Add to Notes */}
+                    {/* Add to Notes */}
                     <button
                       className={`lecture-q-add-btn${lectureQAdded || isNoted ? " noted" : ""}`}
                       onClick={() => {
                         if (isNoted) return;
-                        addQuestionToNotes(q);
+                        // Add whichever answer is currently showing
+                        addQuestionToNotes({ ...q, answer: displayAnswer });
                         setLectureQAdded(true);
                         setTimeout(() => { setActiveLectureQ(null); setLectureQAdded(false); }, 1200);
                       }}
                     >
-                      {lectureQAdded || isNoted ? "✓ Added to notes" : "＋ Add to Notes"}
+                      {lectureQAdded || isNoted ? "✓ Added" : "＋ Add to Notes"}
+                    </button>
+
+                    {/* Expand / Collapse */}
+                    <button
+                      className={`lecture-q-expand-btn${isExpanded ? " active" : ""}`}
+                      title={isExpanded ? "Show concise answer" : "Get a detailed, structured answer"}
+                      onClick={() => {
+                        if (isExpanded) {
+                          // Collapse back to the short answer
+                          setLectureQs(prev => prev.map(x => x.id === q.id ? { ...x, expandedAnswer: null } : x));
+                          setActiveLectureQ(prev => prev?.q.id === q.id ? { ...prev, q: { ...prev.q, expandedAnswer: null } } : prev);
+                        } else {
+                          expandLectureAnswer(q);
+                        }
+                      }}
+                    >
+                      {isExpanded ? "⊖ Collapse" : "⊕ Expand"}
                     </button>
 
                     {/* Copy */}
@@ -3262,7 +3377,7 @@ Return the rewritten passage only:`;
                       className="lecture-panel-btn"
                       style={{ flexShrink: 0 }}
                       onClick={() => {
-                        const txt = `Q: ${q.text}\n${q.answer}`;
+                        const txt = `Q: ${q.text}\nA: ${displayAnswer}`;
                         navigator.clipboard.writeText(txt).catch(() => {
                           const el = document.createElement("textarea");
                           el.value = txt; document.body.appendChild(el); el.select();
@@ -3275,31 +3390,33 @@ Return the rewritten passage only:`;
                       {lectureQCopied ? "Copied!" : "Copy"}
                     </button>
 
-                    {/* Refresh */}
-                    <button
-                      className="lecture-q-refresh-btn"
-                      title="Regenerate response"
-                      onClick={async () => {
-                        const qId = q.id; const qText = q.text;
-                        setLectureQRefreshing(true);
-                        try {
-                          const noteContext = notes.map(n => `[${n.title}]:\n${htmlToText(n.content).slice(0, 400)}`).join("\n\n");
-                          const raw = await ai(
-                            llmProvider, apiKey,
-                            `You help students contribute to class discussions. Given a question from a lecture and the student's notes, write a concise grounded response.
+                    {/* Refresh (only for short answer) */}
+                    {!isExpanded && (
+                      <button
+                        className="lecture-q-refresh-btn"
+                        title="Regenerate concise response"
+                        onClick={async () => {
+                          const qId = q.id; const qText = q.text;
+                          setLectureQRefreshing(true);
+                          try {
+                            const noteContext = notes.map(n => `[${n.title}]:\n${htmlToText(n.content).slice(0, 400)}`).join("\n\n");
+                            const raw = await ai(
+                              llmProvider, apiKey,
+                              `You help students contribute to class discussions. Given a question from a lecture and the student's notes, write a concise grounded response.
 Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
-                            `Question: "${qText}"\n\nStudent notes:\n${noteContext.slice(0, 1200)}`,
-                            400
-                          );
-                          const m = raw.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
-                          const parsed = m ? JSON.parse(m[0]) : null;
-                          const newAnswer = parsed?.answer?.trim() || q.answer;
-                          setLectureQs(prev => prev.map(x => x.id === qId ? { ...x, answer: newAnswer } : x));
-                          setActiveLectureQ(prev => prev ? { ...prev, q: { ...prev.q, answer: newAnswer } } : prev);
-                        } catch {}
-                        finally { setLectureQRefreshing(false); }
-                      }}
-                    >↺</button>
+                              `Question: "${qText}"\n\nStudent notes:\n${noteContext.slice(0, 1200)}`,
+                              400
+                            );
+                            const m = raw.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
+                            const parsed = m ? (() => { try { return JSON.parse(m[0]); } catch { return null; } })() : null;
+                            const newAnswer = parsed?.answer?.trim() || q.answer;
+                            setLectureQs(prev => prev.map(x => x.id === qId ? { ...x, answer: newAnswer } : x));
+                            setActiveLectureQ(prev => prev ? { ...prev, q: { ...prev.q, answer: newAnswer } } : prev);
+                          } catch {}
+                          finally { setLectureQRefreshing(false); }
+                        }}
+                      >↺</button>
+                    )}
                   </div>
                 </>
               ) : (
