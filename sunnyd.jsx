@@ -1494,12 +1494,23 @@ const NoteEditor = forwardRef(function NoteEditor({ content, onChange, onKeyDown
       editor.chain().deleteRange(range).insertContentAt(range.from, replacementHTML).run();
       return true;
     },
-    /* Insert HTML content immediately after the first occurrence of anchorText */
+    /* Insert HTML content immediately after the block node that contains anchorText.
+       We resolve range.to to find its parent top-level block (paragraph, heading, etc.)
+       and insert AFTER that whole block — never mid-paragraph. */
     insertAfterText(anchorText, insertionHTML) {
       if (!editor || !anchorText) return false;
       const range = findTextInDoc(editor.state.doc, anchorText);
       if (!range) return false;
-      editor.commands.insertContentAt(range.to, insertionHTML);
+      try {
+        const $to = editor.state.doc.resolve(range.to);
+        // $to.after(depth) = position right after the node at that depth.
+        // depth=1 is always the top-level block inside the document (paragraph, heading, list…).
+        const insertPos = $to.depth >= 1 ? $to.after(1) : range.to;
+        editor.commands.insertContentAt(insertPos, insertionHTML);
+      } catch {
+        // Fallback: insert at range.to if resolve fails
+        editor.commands.insertContentAt(range.to, insertionHTML);
+      }
       return true;
     },
     /* Get the current HTML content of the editor */
@@ -2341,7 +2352,7 @@ Each item: {"headline":"<5-8 word headline>","preview":"<3-6 word teaser>","deta
 
 CRITICAL — only return suggestions when something GENUINELY important is missing. Do NOT suggest things already covered in the notes. Do NOT suggest trivial or obvious things.
 CRITICAL — textRef: use an exact phrase from the notes ONLY when there is a genuinely related passage nearby. If the content is brand-new with no relevant anchor in the notes, set textRef to null — do NOT invent a random anchor.
-CRITICAL — apply: write in note style (concise, clear) not transcript style. 2-4 sentences max. You MAY use markdown (**bold**, *italic*, ## Heading 2, - bullet list, \`code\`) where it genuinely helps — never force it.
+CRITICAL — apply: write in the SAME style, tone, and voice as the existing note — not like a transcript and not like a formal summary. If the note uses casual short sentences, do that. If it uses bullets, consider that. 2-4 sentences max. The text must flow naturally from whatever paragraph it will be inserted after — write as if the student themselves added it. You MAY use markdown (**bold**, *italic*, ## Heading 2, - bullet list, \`code\`) only if the existing note already uses that style.
 Return [] if nothing important is missing.`,
         `Lecture segment (new content since last scan):\n"${newTranscriptPart.slice(0, 1500)}"\n\nCurrent note content:\n${noteText.slice(0, 1200) || "(empty)"}${noteMetaBlock(note)}`,
         800
@@ -2575,7 +2586,7 @@ Accurate or no real change: {"check":false}`,
 Return ONLY a valid JSON array — no markdown, no extra text.
 
 Each item schema:
-{"cat":"<category>","headline":"<5-8 word headline>","preview":"<3-6 word teaser — must fit one line, no truncation>","detail":"<2-3 sentence detailed suggestion>","apply":"<replacement/addition text. You MAY use markdown formatting (**bold**, *italic*, ## Heading 2, - bullet, 1. numbered, \`code\`) where it genuinely improves clarity — never force it; plain prose is fine too>","textRef":"<REQUIRED: exact phrase from the note this applies to>","articles":null}
+{"cat":"<category>","headline":"<5-8 word headline>","preview":"<3-6 word teaser — must fit one line, no truncation>","detail":"<2-3 sentence detailed suggestion>","apply":"<replacement/addition text. CRITICAL: match the note's existing tone, voice, and formatting exactly — write as if the student wrote it. If the note uses plain casual prose, use that. If it uses bullets, consider bullets. For additions, begin with a natural transition so the text flows from what came before. You MAY use markdown (**bold**, *italic*, ## Heading 2, - bullet, 1. numbered, \`code\`) only if the surrounding note already uses that style — never force it.>","textRef":"<REQUIRED: exact phrase from the note this applies to>","articles":null}
 
 CRITICAL — textRef: Every suggestion MUST have textRef. Copy the exact phrase from the note (10–80 chars) that this suggestion refers to. This enables highlighting. Never use null.
 
@@ -2899,20 +2910,39 @@ Context after selection:
     // ── Fact / clarity: ask LLM to rewrite ONLY the affected passage ─────────
     setStatus("Weaving suggestion into notes…");
     try {
+      // Pull surrounding context so the rewrite blends in seamlessly
+      const refStart = content.indexOf(textRef || "");
+      const ctxBefore = refStart > 0  ? content.slice(Math.max(0, refStart - 180), refStart).trim()             : "";
+      const ctxAfter  = refStart >= 0 ? content.slice(refStart + (textRef || "").length, refStart + (textRef || "").length + 180).trim() : "";
+      const surroundBlock = [
+        ctxBefore && `Text immediately BEFORE the passage:\n"${ctxBefore}"`,
+        ctxAfter  && `Text immediately AFTER the passage:\n"${ctxAfter}"`,
+      ].filter(Boolean).join("\n\n");
+
       let systemPrompt, userPrompt;
       if (s.cat === "fact") {
-        systemPrompt = `You are a writing assistant. Fix a factual error in the given passage.
-Return ONLY the corrected passage — no preamble, no explanation. Match the tone and style of the original.
-You MAY use markdown (**bold**, *italic*, ## Heading 2, - bullet, \`code\`) if it genuinely improves clarity, but plain prose is fine too.`;
-        userPrompt = `Original passage: "${textRef}"
-Factual correction: ${s.detail}
-Corrected text to use (adapt to fit naturally): ${s.apply || s.detail}
+        systemPrompt = `You are a writing assistant making a surgical factual correction inside a student's notes.
+Return ONLY the corrected passage — no preamble, no explanation, no quotes around it.
+CRITICAL FLOW RULES:
+- Match the EXACT tone, voice, and formatting of the original passage (casual/formal, bullets/prose, tense).
+- Your replacement must be a seamless drop-in — it should read as if the student wrote it themselves.
+- Do NOT change sentence structure beyond what is needed for the factual fix.
+- Do NOT add new information, headings, or sections not present in the original.
+- Only use markdown if the original passage already uses markdown.`;
+        userPrompt = `${surroundBlock}${surroundBlock ? "\n\n" : ""}Original passage: "${textRef}"
+Factual correction needed: ${s.detail}
+Suggested corrected text (use as a guide, adapt to fit naturally): ${s.apply || s.detail}
 Return the corrected passage only:`;
       } else {
-        systemPrompt = `You are a writing assistant. Rewrite the given passage to be clearer and more readable.
-Return ONLY the rewritten passage — no preamble, no explanation. Preserve the original meaning, tone, and length.
-You MAY use markdown (**bold**, *italic*, ## Heading 2, - bullet, \`code\`) if it genuinely improves clarity, but plain prose is fine too.`;
-        userPrompt = `Original passage: "${textRef}"
+        systemPrompt = `You are a writing assistant making a clarity improvement inside a student's notes.
+Return ONLY the rewritten passage — no preamble, no explanation, no quotes around it.
+CRITICAL FLOW RULES:
+- Match the EXACT tone, voice, and formatting of the original passage (casual/formal, bullets/prose, tense).
+- Your rewrite must be a seamless drop-in — it should read as if the student wrote it themselves.
+- Preserve the original length as closely as possible. Do NOT expand into multiple paragraphs.
+- Do NOT add headings or new sections. Do NOT change the topic or add new information.
+- Only use markdown if the original passage already uses markdown.`;
+        userPrompt = `${surroundBlock}${surroundBlock ? "\n\n" : ""}Original passage: "${textRef}"
 Clarity suggestion: ${s.detail}
 Return the rewritten passage only:`;
       }
