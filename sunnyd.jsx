@@ -2136,9 +2136,17 @@ export default function SunnyDNotes() {
     const noteContext = notes.map(n => `[${n.title}]:\n${htmlToText(n.content).slice(0, 400)}`).join("\n\n");
     ai(
       llmProvider, apiKey,
-      `You help students contribute to class discussions. Given a question from a lecture and the student's notes, write a concise, grounded response the student could give.
-Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
-      `Question: "${qText}"\n\nStudent notes:\n${noteContext.slice(0, 1200)}${noteMetaBlock(note)}`,
+      `You are SunnyD, a knowledgeable academic assistant. A question was just raised in class and you need to give the student a smart, accurate answer they can use to contribute to the discussion.
+
+CRITICAL RULES:
+- You have broad, expert knowledge — USE IT. Never say you "don't have notes on this" or pretend not to know something you clearly know.
+- Answer the question directly and accurately from your knowledge. The student's notes are additional context, not your only source.
+- Write 1-2 confident, substantive sentences the student could actually say in class.
+- Sound natural and like a student who did their reading — not like an AI hedging.
+- NEVER say things like "based on the name it seems like..." or "I'm not sure but..." — give a real answer.
+
+Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
+      `Question: "${qText}"\n\nStudent notes (for context):\n${noteContext.slice(0, 1200)}${noteMetaBlock(note)}`,
       400
     )
       .then(raw => {
@@ -2162,10 +2170,15 @@ Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
       const transcript  = finalTranscript || "";
       const raw = await ai(
         llmProvider, apiKey,
-        `You are SunnyD, an expert educational assistant helping a student deepen their understanding during a live lecture.
-The student wants a DETAILED, well-structured answer they can use to engage confidently in class.
+        `You are SunnyD, an expert educational assistant helping a student engage deeply with a question raised in their lecture.
+The student wants a DETAILED, well-structured answer they can use to understand the topic fully and contribute confidently in class.
 
 Return ONLY valid JSON (no markdown wrapper): {"answer":"<your full answer in markdown>"}
+
+CRITICAL RULES:
+- You have broad, expert knowledge — USE IT. Answer thoroughly from what you know. The student's notes are context, not your only source.
+- NEVER say you "don't have notes on this" or pretend not to know something. If the notes don't cover a topic, answer from your knowledge.
+- Give a genuinely educational, accurate answer — as if a knowledgeable tutor is explaining it.
 
 Your answer MUST:
 - Be thorough (4-10 sentences or more, use paragraphs as needed)
@@ -2174,7 +2187,7 @@ Your answer MUST:
     • **bold** for key terms or important concepts
     • - bullet lists for enumerated points or examples
     • > blockquote for a key takeaway or definition
-- Ground your answer in the student's notes and lecture context where possible
+- Connect to the student's notes or lecture context where genuinely relevant
 - End with a brief "**Key takeaway:**" line the student can reference quickly`,
         `Question: "${q.text}"
 
@@ -2213,10 +2226,16 @@ Recent lecture transcript:
     try {
       raw = await ai(
         llmProvider, apiKey,
-        `You analyze live lecture transcripts to detect genuine spoken questions and generate helpful responses.
+        `You analyze live lecture transcripts to detect genuine spoken questions and generate smart, accurate responses.
+
 Return ONLY valid JSON, no markdown.
-Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sentences the student could say to contribute, grounded in their notes"}]}
-If no clear questions exist, return {"questions":[]}`,
+Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 confident, accurate sentences the student could say to contribute"}]}
+If no clear questions exist, return {"questions":[]}
+
+CRITICAL for answers:
+- You have expert knowledge — use it. NEVER say "I don't have notes on this" or pretend not to know something you clearly know.
+- Answer directly and accurately from your knowledge. The student's notes are context only.
+- Sound like a prepared student, not an AI hedging. No "it seems like" or "based on the name".`,
         `New transcript segment: "${newText}"
 
 Student's notes for context:
@@ -3572,9 +3591,16 @@ Return the rewritten passage only:`;
                             const noteContext = notes.map(n => `[${n.title}]:\n${htmlToText(n.content).slice(0, 400)}`).join("\n\n");
                             const raw = await ai(
                               llmProvider, apiKey,
-                              `You help students contribute to class discussions. Given a question from a lecture and the student's notes, write a concise grounded response.
-Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
-                              `Question: "${qText}"\n\nStudent notes:\n${noteContext.slice(0, 1200)}${noteMetaBlock(note)}`,
+                              `You are SunnyD, a knowledgeable academic assistant. A question was just raised in class and you need to give the student a smart, accurate answer they can use to contribute to the discussion.
+
+CRITICAL RULES:
+- You have broad, expert knowledge — USE IT. Never say you "don't have notes on this" or pretend not to know something you clearly know.
+- Answer the question directly and accurately from your knowledge. The student's notes are additional context, not your only source.
+- Write 1-2 confident, substantive sentences the student could actually say in class.
+- NEVER hedge with "based on the name it seems like" or "I think it might be" — give a real answer.
+
+Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
+                              `Question: "${qText}"\n\nStudent notes (for context):\n${noteContext.slice(0, 1200)}${noteMetaBlock(note)}`,
                               400
                             );
                             const m = raw.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
