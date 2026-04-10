@@ -1,10 +1,14 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
+import { createPortal } from "react-dom";
 import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from "docx";
 import { saveAs } from "file-saver";
 import { useEditor, EditorContent } from "@tiptap/react";
+import { Extension } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
 
 /* ─── LLM: OpenAI · Claude · Gemini ─────────────────────────────────────── */
 // Lightest/fastest model per provider as of March 2026
@@ -247,6 +251,70 @@ function htmlToText(html) {
     div.innerHTML = html;
     return div.textContent || div.innerText || "";
   } catch { return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(); }
+}
+
+/* Convert LLM markdown output → Tiptap-parseable HTML.
+   If the text already looks like HTML it is passed through unchanged.
+   Supports: # h1, ## h2, ### h3, **bold**, *italic*, _italic_, `code`,
+             ``` code blocks ```, - / * unordered lists, 1. ordered lists,
+             blank-line paragraph breaks. */
+function mdToHtml(text) {
+  if (!text) return "";
+  const t = text.trim();
+  if (t.startsWith("<")) return t; // already HTML — trust it
+
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const inline = s => esc(s)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g,     "<em>$1</em>")
+    .replace(/__(.+?)__/g,     "<strong>$1</strong>")
+    .replace(/_([^_]+)_/g,     "<em>$1</em>")
+    .replace(/`([^`]+)`/g,     "<code>$1</code>");
+
+  const out = [];
+  let listType = null;
+  let codeBuf  = null;
+
+  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
+
+  for (const raw of t.split("\n")) {
+    // Code fence
+    if (/^```/.test(raw)) {
+      if (codeBuf === null) { closeList(); codeBuf = []; }
+      else { out.push(`<pre><code>${esc(codeBuf.join("\n"))}</code></pre>`); codeBuf = null; }
+      continue;
+    }
+    if (codeBuf !== null) { codeBuf.push(raw); continue; }
+
+    // Headings
+    const h1 = raw.match(/^# (.+)$/);  if (h1) { closeList(); out.push(`<h1>${inline(h1[1])}</h1>`); continue; }
+    const h2 = raw.match(/^## (.+)$/); if (h2) { closeList(); out.push(`<h2>${inline(h2[1])}</h2>`); continue; }
+    const h3 = raw.match(/^### (.+)$/);if (h3) { closeList(); out.push(`<h3>${inline(h3[1])}</h3>`); continue; }
+
+    // Unordered list
+    const ul = raw.match(/^[-*] (.+)$/);
+    if (ul) {
+      if (listType !== "ul") { closeList(); out.push("<ul>"); listType = "ul"; }
+      out.push(`<li>${inline(ul[1])}</li>`); continue;
+    }
+    // Ordered list
+    const ol = raw.match(/^\d+\. (.+)$/);
+    if (ol) {
+      if (listType !== "ol") { closeList(); out.push("<ol>"); listType = "ol"; }
+      out.push(`<li>${inline(ol[1])}</li>`); continue;
+    }
+
+    // Blank line
+    if (raw.trim() === "") { closeList(); continue; }
+
+    // Regular paragraph
+    closeList();
+    out.push(`<p>${inline(raw)}</p>`);
+  }
+
+  closeList();
+  if (codeBuf !== null) out.push(`<pre><code>${esc(codeBuf.join("\n"))}</code></pre>`);
+  return out.join("");
 }
 
 const SEED = [
@@ -594,23 +662,32 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 /* ── Lecture toggle & transcript ── */
 .lecture-btn{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:6px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .2s;}
 .lecture-btn:hover{border-color:var(--rule2);color:var(--ink);background:var(--paper);}
-.lecture-btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink);}
-.lecture-btn.on:hover{opacity:.9;}
+.lecture-btn.on{background:#1A1410;color:#fff;border-color:#1A1410;}
+.lecture-btn.on:hover{background:#2C221A;}
 .lecture-btn-ic{font-size:8px;opacity:.9;}
-.lecture-btn.on .lecture-btn-ic{color:#7DD4A0;}
+/* Pulsing red dot shown while actively recording */
+.lecture-rec-dot{width:7px;height:7px;border-radius:50%;background:#E03030;flex-shrink:0;animation:recPulse 1.2s ease-in-out infinite;}
+@keyframes recPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.75)}}
 .lecture-panel{background:linear-gradient(180deg,var(--paper) 0%,#F5F0E8 100%);border-bottom:1px solid var(--rule);padding:12px 18px;animation:lectureSlideIn .3s cubic-bezier(.22,1,.36,1);}
 @keyframes lectureSlideIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
-.lecture-panel-hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;flex-wrap:wrap;}
-.lecture-panel-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--ink3);}
-.lecture-panel-actions{display:flex;gap:6px;}
+.lecture-panel-hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap;}
+.lecture-panel-lbl{display:flex;align-items:center;gap:6px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--ink3);}
+.lecture-panel-actions{display:flex;gap:6px;align-items:center;}
 .lecture-panel-btn{padding:4px 10px;border-radius:5px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:10px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .15s;}
 .lecture-panel-btn:hover{background:var(--paper);border-color:var(--rule2);color:var(--ink);}
-.lecture-transcript{max-height:52px;overflow:hidden;transition:max-height .3s cubic-bezier(.22,1,.36,1);}
-.lecture-transcript.expanded{max-height:300px;overflow-y:auto;}
+.lecture-pause-btn{padding:4px 10px;border-radius:5px;border:1px solid rgba(94,56,160,.3);background:rgba(94,56,160,.07);font-family:'DM Sans',sans-serif;font-size:10px;font-weight:600;color:#5E38A0;cursor:pointer;transition:all .15s;}
+.lecture-pause-btn:hover{background:rgba(94,56,160,.14);border-color:rgba(94,56,160,.5);}
+/* Stats row */
+.lecture-stats{display:flex;align-items:center;gap:12px;margin-bottom:7px;font-size:10px;color:var(--ink3);}
+.lecture-stat{display:flex;align-items:center;gap:4px;}
+.lecture-stat-val{font-weight:600;color:var(--ink2);}
+.lecture-transcript{max-height:68px;overflow:hidden;transition:max-height .35s cubic-bezier(.22,1,.36,1);}
+.lecture-transcript.expanded{max-height:320px;overflow-y:auto;}
 .lecture-text{font-family:'DM Sans',sans-serif;font-size:14px;line-height:1.7;color:var(--ink);margin:0;word-break:break-word;}
-.lecture-interim{color:var(--ink3);opacity:.8;}
+.lecture-interim{color:var(--ink3);opacity:.7;font-style:italic;}
 .lecture-placeholder{font-size:13px;color:var(--ink3);font-style:italic;margin:0;}
-.lecture-q-count{font-size:10px;font-weight:600;color:#5E38A0;margin-top:7px;letter-spacing:.01em;}
+.lecture-footer{display:flex;align-items:center;justify-content:space-between;margin-top:7px;flex-wrap:wrap;gap:6px;}
+.lecture-q-count{font-size:10px;font-weight:600;color:#5E38A0;letter-spacing:.01em;}
 
 /* ── Lecture question highlights ── */
 .lecture-q-hl{background:rgba(94,56,160,.1);border-bottom:2px solid rgba(94,56,160,.4);border-radius:2px 2px 0 0;cursor:pointer;padding:1px 0;transition:background .15s,border-color .15s;position:relative;}
@@ -628,15 +705,22 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .lecture-append-label{font-size:10.5px;font-weight:600;color:#5E38A0;background:rgba(94,56,160,.08);border:1px solid rgba(94,56,160,.2);border-radius:10px;padding:2px 8px;letter-spacing:.01em;white-space:nowrap;}
 
 /* ── Lecture question answer card ── */
-.lecture-q-card{position:fixed;z-index:10000;width:340px;background:var(--page);border:1px solid var(--rule2);border-radius:12px;box-shadow:0 12px 40px rgba(50,35,15,.15),0 4px 12px rgba(50,35,15,.07);overflow:hidden;animation:cardRise .2s cubic-bezier(.22,1,.36,1);}
-.lecture-q-card-hdr{padding:11px 16px;background:linear-gradient(180deg,var(--paper) 0%,rgba(248,244,237,.7) 100%);border-bottom:1px solid var(--rule);display:flex;align-items:center;justify-content:space-between;}
+.lecture-q-card{position:fixed;z-index:10000;width:360px;background:var(--page);border:1px solid var(--rule2);border-radius:12px;box-shadow:0 16px 48px rgba(50,35,15,.16),0 4px 14px rgba(50,35,15,.08);overflow:hidden;animation:cardRise .22s cubic-bezier(.22,1,.36,1);}
+@keyframes cardRise{from{opacity:0;transform:translateY(10px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+.lecture-q-card-hdr{padding:10px 14px;background:linear-gradient(135deg,#F7F2FF 0%,rgba(248,244,237,.9) 100%);border-bottom:1px solid rgba(94,56,160,.15);display:flex;align-items:center;justify-content:space-between;}
 .lecture-q-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#5E38A0;}
-.lecture-q-question{font-family:'DM Sans',sans-serif;font-size:13px;color:var(--ink);font-weight:500;padding:14px 16px 0;line-height:1.55;font-style:italic;}
-.lecture-q-answer{font-family:'DM Sans',sans-serif;font-size:13.5px;line-height:1.72;color:var(--ink2);padding:10px 16px 16px;font-weight:400;}
+.lecture-q-question{font-family:'DM Sans',sans-serif;font-size:13px;color:var(--ink);font-weight:500;padding:13px 16px 0;line-height:1.55;font-style:italic;border-left:3px solid rgba(94,56,160,.35);margin:12px 16px 0;padding:8px 10px;background:rgba(94,56,160,.04);border-radius:0 5px 5px 0;}
+.lecture-q-answer{font-family:'DM Sans',sans-serif;font-size:13.5px;line-height:1.72;color:var(--ink2);padding:12px 16px 14px;font-weight:400;}
 .lecture-q-loading{display:flex;align-items:center;gap:8px;padding:16px;color:var(--ink3);font-size:12px;font-weight:500;}
-.lecture-q-btns{padding:11px 16px;background:var(--paper);border-top:1px solid var(--rule);display:flex;gap:8px;align-items:center;}
-.lecture-q-refresh-btn{margin-left:auto;width:28px;height:28px;border-radius:50%;border:1px solid var(--rule2);background:var(--page);color:var(--ink3);font-size:15px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,border-color .15s,transform .2s;line-height:1;}
-.lecture-q-refresh-btn:hover{background:var(--paper);border-color:var(--ink3);color:var(--ink);transform:rotate(45deg);}
+.lecture-q-btns{padding:10px 14px;background:var(--paper);border-top:1px solid var(--rule);display:flex;gap:7px;align-items:center;}
+.lecture-q-add-btn{flex:1;padding:7px 12px;background:linear-gradient(135deg,#6B3EB8,#5E38A0);color:#fff;border:none;border-radius:7px;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;cursor:pointer;transition:opacity .15s,transform .15s;letter-spacing:.01em;}
+.lecture-q-add-btn:hover{opacity:.88;transform:translateY(-1px);}
+.lecture-q-add-btn.noted{background:var(--green);}
+.lecture-q-refresh-btn{width:28px;height:28px;flex-shrink:0;border-radius:50%;border:1px solid var(--rule2);background:var(--page);color:var(--ink3);font-size:15px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,border-color .15s,transform .25s;line-height:1;}
+.lecture-q-refresh-btn:hover{background:var(--paper);border-color:var(--ink3);color:var(--ink);transform:rotate(60deg);}
+/* Question highlight states */
+.lecture-q-hl.noted{background:rgba(26,104,53,.09);border-bottom-color:rgba(26,104,53,.4);}
+.lecture-q-hl.noted:hover{background:rgba(26,104,53,.16);}
 
 /* ── Layout ── */
 .layout{display:flex;flex:1;overflow:hidden;}
@@ -702,12 +786,55 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .editor-toolbar-btn{padding:4px 10px;border-radius:4px;border:1px solid transparent;background:transparent;cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;}
 .editor-toolbar-btn:hover{background:rgba(0,0,0,.06);}
 .editor-toolbar-btn.active{background:rgba(37,99,235,.12);color:#2563eb;}
-/* Selection result bar */
-.sel-result-bar{display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px 14px;background:var(--paper);border:1px solid var(--rule2);border-radius:8px;font-size:13px;}
-.sel-result-expl{flex:1;color:var(--ink2);font-size:12px;}
-.sel-result-apply{font-size:12px;padding:5px 14px;}
-/* Weave overlay (simplified – fixed top-right of editor) */
-.weave-overlay-fixed{position:absolute;top:0;left:0;right:0;padding:12px 16px;background:rgba(255,255,255,.92);border-radius:8px;backdrop-filter:blur(4px);border:1px solid var(--rule);z-index:10;}
+/* Selection result bar — kept for legacy compat but hidden by new design */
+.sel-result-bar{display:none;}
+/* Weave inline pill — anchored to the affected passage */
+.weave-pill{
+  position:fixed;
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  padding:6px 14px 6px 10px;
+  background:rgba(255,255,255,.97);
+  border:1px solid rgba(215,205,188,.65);
+  border-radius:20px;
+  box-shadow:0 6px 24px rgba(50,35,15,.13),0 1px 4px rgba(50,35,15,.07);
+  backdrop-filter:blur(10px);
+  -webkit-backdrop-filter:blur(10px);
+  font-family:'DM Sans',sans-serif;
+  font-size:12.5px;
+  font-weight:500;
+  color:var(--ink);
+  z-index:9998;
+  pointer-events:none;
+  white-space:nowrap;
+  animation:weavePillIn .3s cubic-bezier(.34,1.56,.64,1) forwards;
+}
+@keyframes weavePillIn{from{opacity:0;transform:translateY(5px) scale(.92)}to{opacity:1;transform:translateY(0) scale(1)}}
+.weave-pill.exiting{animation:weavePillOut .25s ease forwards;}
+@keyframes weavePillOut{from{opacity:1;transform:scale(1)}to{opacity:0;transform:scale(.9)}}
+.weave-pill-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.weave-pill-label{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;opacity:.85;}
+.weave-pill-sep{opacity:.3;margin:0 1px;}
+.weave-pill-msg{color:var(--ink2);font-size:12px;}
+.weave-pill-dots{display:inline-flex;gap:3px;align-items:center;margin-left:2px;}
+.weave-pill-dots span{width:3.5px;height:3.5px;border-radius:50%;background:currentColor;animation:weavePillDot 1.1s ease-in-out infinite;opacity:.5;}
+.weave-pill-dots span:nth-child(2){animation-delay:.17s;}
+.weave-pill-dots span:nth-child(3){animation-delay:.34s;}
+@keyframes weavePillDot{0%,80%,100%{opacity:.25;transform:scale(.7)}40%{opacity:.9;transform:scale(1)}}
+/* Pulsing highlight on the text being rewritten */
+.sugg-applying-hl{border-radius:3px;animation:applyHlPulse 1.4s ease-in-out infinite;}
+@keyframes applyHlPulse{0%,100%{background:rgba(255,175,0,.22);box-shadow:0 0 0 1px rgba(255,150,0,.3)}50%{background:rgba(255,155,0,.38);box-shadow:0 0 0 2px rgba(255,130,0,.25)}}
+/* Flash highlight on newly inserted/replaced text — blinks orange then settles to a soft glow */
+.sugg-inserted-hl{border-radius:3px;animation:insertedFlash 3s cubic-bezier(.22,1,.36,1) forwards;}
+@keyframes insertedFlash{
+  0%  {background:rgba(255,125,0,.55);box-shadow:0 0 0 2px rgba(255,110,0,.4);}
+  18% {background:rgba(255,150,0,.25);box-shadow:0 0 0 1px rgba(255,130,0,.2);}
+  35% {background:rgba(255,125,0,.48);box-shadow:0 0 0 2px rgba(255,110,0,.35);}
+  55% {background:rgba(255,145,0,.28);box-shadow:0 0 0 1px rgba(255,130,0,.18);}
+  75% {background:rgba(255,160,0,.20);box-shadow:0 0 0 1px rgba(255,140,0,.12);}
+  100%{background:rgba(255,170,0,.13);box-shadow:0 0 0 1px rgba(255,150,0,.08);}
+}
 .hl-link{color:#0A6868;text-decoration:underline;text-underline-offset:2px;pointer-events:auto;cursor:pointer;}
 .hl-link:hover{color:#085555;}
 
@@ -810,6 +937,7 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 @keyframes annEnter{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:translateX(0)}}
 
 /* Weave overlay — blur text behind, cream tint, typing animation */
+/* Legacy weave-overlay (kept for other uses) */
 .weave-overlay{position:absolute;z-index:10;display:flex;align-items:flex-start;padding:10px 14px;background:rgba(248,244,237,.22);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid rgba(215,205,188,.5);border-radius:10px;pointer-events:auto;animation:weaveIn .5s cubic-bezier(.22,1,.36,1) forwards;box-shadow:0 2px 12px rgba(50,35,15,.06);overflow-y:auto;max-height:200px;}
 .weave-overlay .weave-typing{font-family:'DM Sans',sans-serif;font-size:16px;line-height:1.85;color:var(--ink);white-space:pre-wrap;word-break:break-word;}
 .weave-overlay .weave-cursor{display:inline-block;width:2px;height:1.05em;background:var(--ink);margin-left:1px;vertical-align:text-bottom;animation:weaveCursor 1s step-end infinite;}
@@ -819,6 +947,10 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 /* Suggestion textRef highlight in editor */
 .hs{border-radius:2px;transition:background .2s ease,box-shadow .2s ease;animation:hsIn .3s ease forwards;}
 @keyframes hsIn{from{opacity:.3}to{opacity:1}}
+/* Hover-highlight decoration rendered by ProseMirror */
+.sugg-hover-hl{background:rgba(255,180,0,.28);border-radius:3px;box-shadow:0 0 0 1.5px rgba(255,160,0,.35);transition:background .15s ease;}
+/* Stronger tint when a docked card is open — kept via JS, not just :hover */
+.docked-open .sugg-hover-hl{background:rgba(255,165,0,.35);box-shadow:0 0 0 2px rgba(255,145,0,.4);}
 
 /* Highlight for referenced text (docked card) */
 .href{border-radius:3px;transition:background .5s ease,border-color .5s ease;animation:hrefIn 1s cubic-bezier(.22,1,.36,1) forwards;}
@@ -909,16 +1041,86 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .x-btn{background:none;border:none;color:#C0B8AE;cursor:pointer;font-size:18px;line-height:1;padding:0 2px;transition:color .13s;}
 .x-btn:hover{color:var(--ink2);}
 
-/* ── Selection card ── */
-.sel-card{position:fixed;z-index:9999;transform:translateX(-50%);background:var(--page);border:1px solid var(--rule2);border-radius:12px;box-shadow:0 12px 40px rgba(50,35,15,.14),0 4px 12px rgba(50,35,15,.06);padding:6px;animation:cardRise .2s cubic-bezier(.22,1,.36,1);min-width:260px;}
-@keyframes cardRise{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
-.sel-hd{padding:8px 12px 8px;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--ink3);border-bottom:1px solid var(--rule);margin-bottom:2px;opacity:.9;}
-.sel-act{display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border-radius:8px;background:none;border:none;cursor:pointer;text-align:left;font-family:'DM Sans',sans-serif;transition:all .15s;}
-.sel-act:hover{background:linear-gradient(135deg,var(--paper) 0%,rgba(248,244,237,.8) 100%);}
-.sel-act-ic{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,var(--paper) 0%,#EDE7DC 100%);border:1px solid var(--rule);display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--ink2);flex-shrink:0;}
-.sel-act:hover .sel-act-ic{background:linear-gradient(135deg,#EDE7DC 0%,#E5DDD4 100%);border-color:var(--rule2);}
-.sel-act-lbl{font-size:13px;font-weight:600;color:var(--ink);line-height:1.25;}
-.sel-act-desc{font-size:11px;color:var(--ink3);line-height:1.35;margin-top:1px;}
+/* ── Selection toolbar (compact dark floating bar) ── */
+.sel-toolbar{
+  position:fixed;z-index:9999;
+  display:inline-flex;align-items:center;gap:1px;
+  background:#1A1410;border-radius:9px;
+  box-shadow:0 6px 24px rgba(0,0,0,.28),0 2px 8px rgba(0,0,0,.18);
+  padding:4px;
+  animation:selToolIn .15s cubic-bezier(.34,1.56,.64,1) forwards;
+  transform:translateX(-50%);
+  user-select:none;
+}
+@keyframes selToolIn{from{opacity:0;transform:translateX(-50%) scale(.88)}to{opacity:1;transform:translateX(-50%) scale(1)}}
+.sel-toolbar-btn{
+  display:flex;align-items:center;gap:5px;
+  padding:5px 11px;border-radius:6px;
+  background:none;border:none;color:rgba(255,255,255,.88);
+  font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;
+  cursor:pointer;transition:background .1s,color .1s;
+  white-space:nowrap;
+}
+.sel-toolbar-btn:hover{background:rgba(255,255,255,.14);color:#fff;}
+.sel-toolbar-btn-ic{font-size:11px;opacity:.7;}
+.sel-toolbar-sep{width:1px;height:16px;background:rgba(255,255,255,.14);margin:0 2px;flex-shrink:0;}
+/* Thinking pill — replaces toolbar while AI works */
+.sel-thinking-pill{
+  position:fixed;z-index:9999;
+  display:inline-flex;align-items:center;gap:7px;
+  padding:6px 14px;
+  background:#1A1410;border-radius:20px;
+  color:rgba(255,255,255,.8);
+  font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;
+  box-shadow:0 4px 18px rgba(0,0,0,.22);
+  transform:translateX(-50%);
+  animation:selToolIn .15s ease forwards;
+  pointer-events:none;
+}
+/* Floating result card */
+.sel-result-card{
+  position:fixed;z-index:9999;width:420px;max-width:calc(100vw - 24px);
+  background:var(--page);border:1px solid var(--rule2);border-radius:12px;
+  box-shadow:0 16px 48px rgba(50,35,15,.16),0 4px 14px rgba(50,35,15,.08);
+  overflow:hidden;
+  animation:cardRise .2s cubic-bezier(.22,1,.36,1);
+}
+@keyframes cardRise{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+.sel-result-hdr{
+  padding:10px 14px;
+  background:var(--paper);border-bottom:1px solid var(--rule);
+  display:flex;align-items:center;gap:8px;
+}
+.sel-result-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);}
+.sel-result-orig{
+  font-size:11px;color:var(--ink3);font-style:italic;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;max-width:260px;
+}
+.sel-result-close{background:none;border:none;color:var(--ink3);cursor:pointer;font-size:16px;line-height:1;padding:0;margin-left:auto;}
+.sel-result-close:hover{color:var(--ink);}
+.sel-result-op{
+  font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;
+  padding:2px 7px;border-radius:4px;flex-shrink:0;
+}
+.sel-result-op.replace{background:rgba(197,84,0,.1);color:#C04500;}
+.sel-result-op.add{background:rgba(26,104,53,.1);color:#1A6835;}
+.sel-result-body{
+  padding:14px 16px;font-family:'DM Sans',sans-serif;font-size:14px;line-height:1.75;
+  color:var(--ink);overflow-y:auto;max-height:200px;
+}
+.sel-result-body p{margin:.2rem 0;}
+.sel-result-body strong{font-weight:600;}
+.sel-result-body em{font-style:italic;}
+.sel-result-body code{font-family:monospace;font-size:12px;background:#1e1e1e;color:#d4d4d4;padding:1px 5px;border-radius:3px;}
+.sel-result-body ul,.sel-result-body ol{padding-left:1.3rem;margin:.4rem 0;}
+.sel-result-body h1,.sel-result-body h2,.sel-result-body h3{font-weight:600;margin:.6rem 0 .3rem;}
+.sel-result-expl{font-size:11.5px;color:var(--ink3);padding:0 16px 12px;line-height:1.5;}
+.sel-result-btns{
+  padding:10px 14px;background:var(--paper);border-top:1px solid var(--rule);
+  display:flex;gap:8px;align-items:center;
+}
+/* Legacy sel-act kept but unused */
+.sel-hd,.sel-act,.sel-act-ic,.sel-act-lbl,.sel-act-desc{display:none;}
 
 /* ── Selection inline preview (below highlighted section) ── */
 .sel-pending{background:rgba(94,56,160,.08);border-bottom:2px solid rgba(94,56,160,.25);border-radius:3px 3px 0 0;}
@@ -1002,12 +1204,122 @@ function Toolbar({ editor }) {
   );
 }
 
+/* ─── NoteEditor hover-highlight ProseMirror plugin ─────────────────────── */
+const hoverHlKey = new PluginKey("hoverHighlight");
+const hoverHlPlugin = new Plugin({
+  key: hoverHlKey,
+  state: {
+    init() { return null; },
+    apply(tr, value) {
+      const meta = tr.getMeta(hoverHlKey);
+      return meta !== undefined ? meta : value;
+    },
+  },
+  props: {
+    decorations(state) {
+      const range = this.getState(state);
+      if (!range) return DecorationSet.empty;
+      return DecorationSet.create(state.doc, [
+        Decoration.inline(range.from, range.to, { class: "sugg-hover-hl" }),
+      ]);
+    },
+  },
+});
+
+const HoverHighlightExtension = Extension.create({
+  name: "hoverHighlight",
+  addProseMirrorPlugins() { return [hoverHlPlugin]; },
+});
+
+/* ─── Applying-highlight plugin (pulsing amber while AI rewrites a passage) ─ */
+const applyingHlKey = new PluginKey("applyingHighlight");
+const applyingHlPlugin = new Plugin({
+  key: applyingHlKey,
+  state: {
+    init() { return null; },
+    apply(tr, value) {
+      const meta = tr.getMeta(applyingHlKey);
+      return meta !== undefined ? meta : value;
+    },
+  },
+  props: {
+    decorations(state) {
+      const range = this.getState(state);
+      if (!range) return DecorationSet.empty;
+      return DecorationSet.create(state.doc, [
+        Decoration.inline(range.from, range.to, { class: "sugg-applying-hl" }),
+      ]);
+    },
+  },
+});
+
+const ApplyingHighlightExtension = Extension.create({
+  name: "applyingHighlight",
+  addProseMirrorPlugins() { return [applyingHlPlugin]; },
+});
+
+/* ─── Inserted-highlight plugin (blink-then-glow after text is applied) ─── */
+const insertedHlKey = new PluginKey("insertedHighlight");
+const insertedHlPlugin = new Plugin({
+  key: insertedHlKey,
+  state: {
+    init() { return null; },
+    apply(tr, value) {
+      const meta = tr.getMeta(insertedHlKey);
+      return meta !== undefined ? meta : value;
+    },
+  },
+  props: {
+    decorations(state) {
+      const range = this.getState(state);
+      if (!range) return DecorationSet.empty;
+      return DecorationSet.create(state.doc, [
+        Decoration.inline(range.from, range.to, { class: "sugg-inserted-hl" }),
+      ]);
+    },
+  },
+});
+
+const InsertedHighlightExtension = Extension.create({
+  name: "insertedHighlight",
+  addProseMirrorPlugins() { return [insertedHlPlugin]; },
+});
+
+/* Find a text string in a ProseMirror doc, return {from, to} doc positions */
+function findTextInDoc(doc, searchText) {
+  if (!searchText) return null;
+  let text = "";
+  const positions = [];
+  doc.descendants((node, pos) => {
+    if (node.isText) {
+      for (let i = 0; i < (node.text || "").length; i++) {
+        text += node.text[i];
+        positions.push(pos + i);
+      }
+    }
+  });
+  // Try direct match first, then normalised whitespace match
+  let idx = text.indexOf(searchText);
+  if (idx === -1) {
+    const norm = s => s.replace(/\s+/g, " ").trim();
+    const normNeedle = norm(searchText);
+    const normHaystack = norm(text);
+    idx = normHaystack.indexOf(normNeedle);
+  }
+  if (idx === -1 || idx >= positions.length) return null;
+  const endIdx = Math.min(idx + searchText.length - 1, positions.length - 1);
+  return { from: positions[idx], to: positions[endIdx] + 1 };
+}
+
 /* ─── NoteEditor ─────────────────────────────────────────────────────────── */
 const NoteEditor = forwardRef(function NoteEditor({ content, onChange, onKeyDown }, ref) {
   const editor = useEditor({
     extensions: [
       StarterKit,
       Placeholder.configure({ placeholder: "Start writing — SunnyD will assist as you go." }),
+      HoverHighlightExtension,
+      ApplyingHighlightExtension,
+      InsertedHighlightExtension,
     ],
     content: content || "",
     onUpdate({ editor }) {
@@ -1019,6 +1331,11 @@ const NoteEditor = forwardRef(function NoteEditor({ content, onChange, onKeyDown
   useImperativeHandle(ref, () => ({
     insertAtCursor(text) {
       editor?.commands.insertContent(text);
+    },
+    /* Append rich HTML at the very end of the document (moves cursor there first) */
+    appendContent(html) {
+      if (!editor) return;
+      editor.chain().focus("end").insertContent(html).run();
     },
     getSelection() {
       if (!editor) return "";
@@ -1033,6 +1350,75 @@ const NoteEditor = forwardRef(function NoteEditor({ content, onChange, onKeyDown
     },
     getEditorDom() {
       return editor?.view?.dom ?? null;
+    },
+    /* Highlight text in the editor matching textRef (called on suggestion hover) */
+    setHoverHighlight(textRef) {
+      if (!editor) return;
+      if (!textRef) {
+        editor.view.dispatch(editor.state.tr.setMeta(hoverHlKey, null));
+        return;
+      }
+      const range = findTextInDoc(editor.state.doc, textRef);
+      if (range) {
+        editor.view.dispatch(editor.state.tr.setMeta(hoverHlKey, range));
+      }
+    },
+    clearHoverHighlight() {
+      if (!editor) return;
+      editor.view.dispatch(editor.state.tr.setMeta(hoverHlKey, null));
+    },
+    /* Surgically replace oldText with replacementHTML in the editor */
+    findAndReplaceText(oldText, replacementHTML) {
+      if (!editor || !oldText) return false;
+      const range = findTextInDoc(editor.state.doc, oldText);
+      if (!range) return false;
+      editor.chain().deleteRange(range).insertContentAt(range.from, replacementHTML).run();
+      return true;
+    },
+    /* Insert HTML content immediately after the first occurrence of anchorText */
+    insertAfterText(anchorText, insertionHTML) {
+      if (!editor || !anchorText) return false;
+      const range = findTextInDoc(editor.state.doc, anchorText);
+      if (!range) return false;
+      editor.commands.insertContentAt(range.to, insertionHTML);
+      return true;
+    },
+    /* Get the current HTML content of the editor */
+    getEditorContent() {
+      return editor?.getHTML() ?? "";
+    },
+    /* Get the viewport bounding rect of the current text selection */
+    getSelectionRect() {
+      if (!editor) return null;
+      const { from, to } = editor.state.selection;
+      if (from === to) return null;
+      try {
+        const s = editor.view.coordsAtPos(from);
+        const e = editor.view.coordsAtPos(to);
+        return { top: Math.min(s.top, e.top), bottom: Math.max(s.bottom, e.bottom), left: Math.min(s.left, e.left), right: Math.max(s.right, e.right) };
+      } catch { return null; }
+    },
+    /* Pulsing highlight while AI is rewriting a passage */
+    setApplyingHighlight(textRef) {
+      if (!editor || !textRef) return;
+      const range = findTextInDoc(editor.state.doc, textRef);
+      if (range) editor.view.dispatch(editor.state.tr.setMeta(applyingHlKey, range));
+    },
+    clearApplyingHighlight() {
+      if (!editor) return;
+      editor.view.dispatch(editor.state.tr.setMeta(applyingHlKey, null));
+    },
+    /* Blink-then-glow highlight on newly inserted/replaced text */
+    setInsertedHighlight(searchText) {
+      if (!editor || !searchText) return;
+      // Use first ~100 chars as search key; trim trailing whitespace
+      const key = searchText.trim().slice(0, 100);
+      const range = findTextInDoc(editor.state.doc, key);
+      if (range) editor.view.dispatch(editor.state.tr.setMeta(insertedHlKey, range));
+    },
+    clearInsertedHighlight() {
+      if (!editor) return;
+      editor.view.dispatch(editor.state.tr.setMeta(insertedHlKey, null));
     },
   }), [editor]);
 
@@ -1297,16 +1683,23 @@ export default function SunnyDNotes() {
   const [ghostThinking, setGhostThinking] = useState(false);
   const [selMenu,     setSelMenu]     = useState(null);
   const [selRes,      setSelRes]      = useState(null);
+  const [selThinking, setSelThinking] = useState(null); // { action, x, y }
   const [busy,        setBusy]        = useState(false);
   const [statusTxt,   setStatus]      = useState("");
   const [copied,      setCopied]      = useState(false);
   const [suggFreq,    setSuggFreq]    = useState(() => { try { return sessionStorage.getItem("sd_suggFreq") || "balanced"; } catch { return "balanced"; } });
   const [lectureOn,   setLectureOn]   = useState(false);
+  const [lecturePaused, setLecturePaused] = useState(false);
   const [showFullTranscript, setShowFullTranscript] = useState(false);
   const [lectureQs,   setLectureQs]   = useState([]); // detected questions in transcript
   const [activeLectureQ, setActiveLectureQ] = useState(null); // { q, x, y }
   const [lectureQCopied, setLectureQCopied] = useState(false);
+  const [lectureQAdded,  setLectureQAdded]  = useState(false);
   const [lectureQRefreshing, setLectureQRefreshing] = useState(false);
+  const [lectureQGenerating, setLectureQGenerating] = useState(false); // auto-generating missing answer
+  const [notedQIds, setNotedQIds] = useState(new Set()); // Q IDs added to notes
+  const [lectureSecs, setLectureSecs] = useState(0); // session duration counter
+  const lectureTimerRef = useRef(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [savingToDisk, setSavingToDisk] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1319,6 +1712,7 @@ export default function SunnyDNotes() {
   const annColRef   = useRef(null);
   const panelBodyRef = useRef(null);
   const [suggTops, setSuggTops] = useState({});
+  const [applyingOverlay, setApplyingOverlay] = useState(null); // {top,left,cat,exiting}
   const timers      = useRef({});
   const dismissed   = useRef({ fact: new Set(), research: new Set() });
   const checked     = useRef(new Set());
@@ -1384,24 +1778,67 @@ export default function SunnyDNotes() {
   const activeSugg = suggestions.filter(s => s.noteId === activeId && (!s.textRef || content.includes(s.textRef)));
   const applyingSugg = suggestions.find(s => s.applying);
 
-  /* ── Lecture mode: start/stop speech recognition ── */
+  /* Compute viewport rect of the first line of textRef for the pill overlay */
+  const getPillPosition = useCallback((textRef) => {
+    const editorDom = editorRef.current?.getEditorDom();
+    if (!editorDom || !textRef) return null;
+    const plainText = contentRef.current || "";
+    const idx = plainText.indexOf(textRef);
+    if (idx === -1) return null;
+    const walker = document.createTreeWalker(editorDom, NodeFilter.SHOW_TEXT);
+    let node, charOffset = 0;
+    while ((node = walker.nextNode())) {
+      const len = node.textContent.length;
+      if (charOffset + len > idx) {
+        const r = document.createRange();
+        const startOff = idx - charOffset;
+        r.setStart(node, startOff);
+        r.setEnd(node, Math.min(startOff + Math.min(textRef.length, len - startOff), len));
+        const rect = r.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return null;
+        // Position pill above the first line; if near top of viewport, go below instead
+        const PILL_H = 40;
+        const MARGIN = 8;
+        const top = rect.top > PILL_H + MARGIN * 2
+          ? rect.top - PILL_H - MARGIN          // above
+          : rect.bottom + MARGIN;               // below
+        const left = Math.max(12, Math.min(rect.left, window.innerWidth - 280));
+        return { top, left };
+      }
+      charOffset += len;
+    }
+    return null;
+  }, []);
+
+  /* ── Lecture mode: start / pause / stop speech recognition ── */
   useEffect(() => {
     if (!browserSupportsSpeechRecognition) return;
-    if (lectureOn) {
-      // lang: en-US gives Chrome's cloud STT the best accuracy hint
+    if (lectureOn && !lecturePaused) {
       SpeechRecognition.startListening({ continuous: true, language: "en-US" });
-    } else {
+      // Tick duration counter every second while recording
+      lectureTimerRef.current = setInterval(() => setLectureSecs(s => s + 1), 1000);
+    } else if (lectureOn && lecturePaused) {
       SpeechRecognition.stopListening();
+      clearInterval(lectureTimerRef.current);
+    } else {
+      // Lecture turned off — full reset
+      SpeechRecognition.stopListening();
+      clearInterval(lectureTimerRef.current);
+      setLecturePaused(false);
       setShowFullTranscript(false);
       setLectureQs([]);
       setActiveLectureQ(null);
+      setNotedQIds(new Set());
+      setLectureSecs(0);
       scannedTranscriptRef.current = "";
       scannedLectureSuggRef.current = "";
-      // Remove lecture suggestions when lecture mode turns off
       setSugg(p => p.filter(s => s.cat !== "lecture"));
     }
-    return () => { if (lectureOn) SpeechRecognition.stopListening(); };
-  }, [lectureOn, browserSupportsSpeechRecognition]);
+    return () => {
+      clearInterval(lectureTimerRef.current);
+      if (lectureOn) SpeechRecognition.stopListening();
+    };
+  }, [lectureOn, lecturePaused, browserSupportsSpeechRecognition]);
 
   /* ── On mount: try to load notes from disk file if we have a saved handle ── */
   useEffect(() => {
@@ -1475,14 +1912,40 @@ export default function SunnyDNotes() {
   useEffect(() => {
     if (!lectureOn || !finalTranscript) return;
     const newText = finalTranscript.slice(scannedLectureSuggRef.current.length);
-    // Wait for at least ~40 new words before triggering a scan
-    if ((newText.match(/\S+/g) || []).length < 40) return;
+    // Wait for at least ~20 new words before triggering a scan (was 40)
+    if ((newText.match(/\S+/g) || []).length < 20) return;
     clearTimeout(lectureSuggTimerRef.current);
     lectureSuggTimerRef.current = setTimeout(() => {
       const noteText = notes.find(n => n.id === activeId)?.content || "";
       generateLectureSuggestions(activeId, noteText, finalTranscript);
-    }, 3500);
+    }, 3000);
   }, [finalTranscript, lectureOn]);
+
+  /* ── Auto-generate answer when a question card opens with no answer yet ── */
+  useEffect(() => {
+    if (!activeLectureQ || activeLectureQ.q.answer) return;
+    const qId = activeLectureQ.q.id;
+    const qText = activeLectureQ.q.text;
+    setLectureQGenerating(true);
+    const noteContext = notes.map(n => `[${n.title}]:\n${htmlToText(n.content).slice(0, 400)}`).join("\n\n");
+    ai(
+      llmProvider, apiKey,
+      `You help students contribute to class discussions. Given a question from a lecture and the student's notes, write a concise, grounded response the student could give.
+Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
+      `Question: "${qText}"\n\nStudent notes:\n${noteContext.slice(0, 1200)}`,
+      400
+    )
+      .then(raw => {
+        const m = raw.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
+        const parsed = m ? JSON.parse(m[0]) : null;
+        const answer = parsed?.answer?.trim() || "";
+        if (!answer) return;
+        setLectureQs(prev => prev.map(q => q.id === qId ? { ...q, answer } : q));
+        setActiveLectureQ(prev => prev?.q.id === qId ? { ...prev, q: { ...prev.q, answer } } : prev);
+      })
+      .catch(() => {})
+      .finally(() => setLectureQGenerating(false));
+  }, [activeLectureQ?.q?.id]); // only re-run when a different question is opened
 
   async function detectLectureQuestions(currentTranscript) {
     const newText = currentTranscript.slice(scannedTranscriptRef.current.length).trim();
@@ -1533,11 +1996,24 @@ ${noteContext.slice(0, 1200)}`,
   }
 
   /* ── Lecture suggestions: find transcript content missing from the note ── */
+  /* ── Add a Q&A to the note as structured content ── */
+  function addQuestionToNotes(q) {
+    const html = `<p><strong>Q:</strong> <em>${q.text}</em></p>${mdToHtml(q.answer)}`;
+    editorRef.current?.insertAfterText(
+      content.trim().slice(-60), // anchor near end of note
+      html
+    ) || editorRef.current?.appendContent(html);
+    setNotedQIds(prev => new Set([...prev, q.id]));
+    // Flash the newly added Q&A
+    setTimeout(() => editorRef.current?.setInsertedHighlight(q.answer.slice(0, 80)), 150);
+    setTimeout(() => editorRef.current?.clearInsertedHighlight(), 9000);
+  }
+
   async function generateLectureSuggestions(noteId, noteText, transcript) {
     if (!transcript.trim() || transcript.length < 80) return;
     // Only scan the new portion since last lecture-sugg scan
     const newTranscriptPart = transcript.slice(scannedLectureSuggRef.current.length).trim();
-    if ((newTranscriptPart.match(/\S+/g) || []).length < 40) return;
+    if ((newTranscriptPart.match(/\S+/g) || []).length < 20) return;
     scannedLectureSuggRef.current = transcript;
 
     try {
@@ -1549,7 +2025,7 @@ Each item: {"headline":"<5-8 word headline>","preview":"<3-6 word teaser>","deta
 
 CRITICAL — only return suggestions when something GENUINELY important is missing. Do NOT suggest things already covered in the notes. Do NOT suggest trivial or obvious things.
 CRITICAL — textRef: use an exact phrase from the notes ONLY when there is a genuinely related passage nearby. If the content is brand-new with no relevant anchor in the notes, set textRef to null — do NOT invent a random anchor.
-CRITICAL — apply: write in note style (concise, clear) not transcript style. 2-4 sentences max.
+CRITICAL — apply: write in note style (concise, clear) not transcript style. 2-4 sentences max. You MAY use markdown (**bold**, *italic*, ## Heading 2, - bullet list, \`code\`) where it genuinely helps — never force it.
 Return [] if nothing important is missing.`,
         `Lecture segment (new content since last scan):\n"${newTranscriptPart.slice(0, 1500)}"\n\nCurrent note content:\n${noteText.slice(0, 1200) || "(empty)"}`,
         800
@@ -1578,6 +2054,13 @@ Return [] if nothing important is missing.`,
     }
   }
 
+  /* Format mm:ss from total seconds */
+  function fmtDuration(secs) {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
   /* ── Render finalTranscript with detected questions highlighted ── */
   function renderTranscriptText(text) {
     if (!text) return null;
@@ -1594,18 +2077,19 @@ Return [] if nothing important is missing.`,
     for (const q of positioned) {
       if (q.idx < pos) continue;
       if (q.idx > pos) parts.push(<span key={`t-${pos}`}>{text.slice(pos, q.idx)}</span>);
+      const isNoted = notedQIds.has(q.id);
       parts.push(
         <span
           key={q.id}
-          className={`lecture-q-hl${q.answer ? " answered" : ""}`}
-          title="Click for a suggested response"
+          className={`lecture-q-hl${q.answer ? " answered" : ""}${isNoted ? " noted" : ""}`}
+          title={isNoted ? "Added to notes" : "Click for a suggested response"}
           onClick={e => {
             e.stopPropagation();
             setActiveLectureQ(prev => prev?.q.id === q.id ? null : { q, x: e.clientX, y: e.clientY });
           }}
         >
           {q.text}
-          <span className="lecture-q-pip">?</span>
+          <span className="lecture-q-pip">{isNoted ? "✓" : "?"}</span>
         </span>
       );
       pos = q.idx + q.text.length;
@@ -1775,7 +2259,7 @@ Accurate or no real change: {"check":false}`,
 Return ONLY a valid JSON array — no markdown, no extra text.
 
 Each item schema:
-{"cat":"<category>","headline":"<5-8 word headline>","preview":"<3-6 word teaser — must fit one line, no truncation>","detail":"<2-3 sentence detailed suggestion>","apply":"<replacement/addition text or null>","textRef":"<REQUIRED: exact phrase from the note this applies to>","articles":null}
+{"cat":"<category>","headline":"<5-8 word headline>","preview":"<3-6 word teaser — must fit one line, no truncation>","detail":"<2-3 sentence detailed suggestion>","apply":"<replacement/addition text. You MAY use markdown formatting (**bold**, *italic*, ## Heading 2, - bullet, 1. numbered, \`code\`) where it genuinely improves clarity — never force it; plain prose is fine too>","textRef":"<REQUIRED: exact phrase from the note this applies to>","articles":null}
 
 CRITICAL — textRef: Every suggestion MUST have textRef. Copy the exact phrase from the note (10–80 chars) that this suggestion refers to. This enables highlighting. Never use null.
 
@@ -1943,10 +2427,16 @@ If the fragment could already be a complete sentence (they may have just forgott
     setTimeout(() => {
       const selectedText = (editorRef.current?.getSelection() || "").trim();
       if (!selectedText || selectedText.length < 10) { setSelMenu(null); return; }
-      // Compute character positions in plain text for context extraction
       const start = content.indexOf(selectedText);
       const end = start !== -1 ? start + selectedText.length : -1;
-      setSelMenu({ text: selectedText, start, end, x: mouseX, y: mouseY - 10 });
+      // Use the actual selection rect for precise positioning; fall back to mouse pos
+      const rect = editorRef.current?.getSelectionRect() || null;
+      const anchorX = rect ? Math.round((rect.left + rect.right) / 2) : mouseX;
+      // Place toolbar just above the selection; if near viewport top, place below
+      const anchorY = rect
+        ? (rect.top < 80 ? rect.bottom + 10 : rect.top - 10)
+        : (mouseY < 80 ? mouseY + 10 : mouseY - 10);
+      setSelMenu({ text: selectedText, start, end, x: anchorX, y: anchorY, rect, below: (rect ? rect.top < 80 : mouseY < 80) });
     }, 25);
   };
 
@@ -1955,146 +2445,87 @@ If the fragment could already be a complete sentence (they may have just forgott
     busyWithSelAction.current = true;
     clearTimeout(timers.current.s);
     clearTimeout(timers.current.f);
-    const { text: t, start, end } = selMenu;
-    const fullContext = content;
+    const { text: t, start, end, x, y, below } = selMenu;
     const noteTitle = note?.title || "Untitled";
-    const ctxBefore = content.slice(Math.max(0, start - 220), start);
-    const ctxAfter = content.slice(end, Math.min(content.length, end + 220));
-    const isStartOfSentence = /(^|[.!?\n]\s*)$/.test(ctxBefore);
-    const isEndOfSentence = /^([.!?]|\s|$)/.test(ctxAfter) || ctxAfter.length === 0;
-    const isMidSentence = !isStartOfSentence && !isEndOfSentence;
+    const ctxBefore = content.slice(Math.max(0, start - 300), start);
+    const ctxAfter  = content.slice(end, Math.min(content.length, end + 300));
+    // Show thinking pill at same spot as toolbar, then hide toolbar
     setSelMenu(null);
-    setBusy(true); setStatus({ summarize: "Summarizing…", expand: "Expanding…", explain: "Explaining…" }[action]);
-    const sys = `You are SunnyD. Return ONLY valid JSON, no markdown. Schema: {"op":"replace"|"add_after"|"add_before"|"delete","text":"...","explanation":"..."}
-- "replace": replace the selection with your response (use for summarize or when rewriting)
-- "add_after": keep selection, add your response after it. Your "text" MUST include any leading space, punctuation, or newlines for natural flow (e.g. " (i.e., ...)" or " — " for inline; newline for new paragraph).
-- "add_before": keep selection, add your response before it. Your "text" MUST include trailing space or newlines for natural flow.
-- "delete": remove the selection, put your response in "text" if replacing with something shorter.
-"explanation": REQUIRED. 1–2 sentences max. Brief overview of what SunnyD will do.`;
-    const otherNotes = notes.filter(n => n.id !== activeId);
-    const crossCtx = otherNotes.length > 0
-      ? `\n\nOther notes (for topic context):\n${otherNotes.map(n => `[${n.title}]: ${n.content.slice(0, 200)}${n.content.length > 200 ? "…" : ""}`).join("\n\n")}`
-      : "";
-    const ctxBlock = `Note title: "${noteTitle}"
+    setSelThinking({ action, x, y, below });
 
-Text BEFORE the selection (for flow):
+    // Each action has a fixed op so behaviour is predictable
+    const OP = { summarize: "replace", expand: "add_after", explain: "add_after" };
+    const op = OP[action];
+
+    const sysPrompts = {
+      summarize:
+        `You are SunnyD. Condense the selected passage into a shorter, clearer version that captures every key idea.
+Return ONLY valid JSON (no markdown wrapper): {"text":"<replacement>","explanation":"<1 sentence>"}
+The replacement text may use markdown (**bold**, *italic*, ## Heading, - bullet, \`code\`) where it naturally fits — don't overdo it.
+Keep the tone of the original note. Do not truncate — the replacement should be complete.`,
+      expand:
+        `You are SunnyD. Write additional depth, context, or examples to place immediately after the selected passage.
+Return ONLY valid JSON (no markdown wrapper): {"text":"<text to add after>","explanation":"<1 sentence>"}
+Start your text with a newline (\\n) to form a natural paragraph break.
+The text may use markdown (**bold**, *italic*, ## Heading, - bullet, \`code\`) where it naturally fits.
+Match the tone of the note. Do not truncate.`,
+      explain:
+        `You are SunnyD. Write a plain-language explanation of the selected passage to add immediately after it.
+Return ONLY valid JSON (no markdown wrapper): {"text":"<explanation to add after>","explanation":"<1 sentence>"}
+Start your text with "\\n\\n> " to render as a callout-style blockquote, or with "\\n\\n" for a normal paragraph.
+The text may use markdown (**bold**, *italic*, - bullet) where it helps clarity.
+Keep it concise (2–4 sentences). Match the note tone.`,
+    };
+    const userMsg = `Note title: "${noteTitle}"
+
+Context before selection:
 "${ctxBefore}"
 
 Selected text:
 "${t}"
 
-Text AFTER the selection (for flow):
-"${ctxAfter}"
+Context after selection:
+"${ctxAfter}"`;
 
-Insertion context: Selection is ${isMidSentence ? "mid-sentence" : isStartOfSentence ? "at start of sentence" : "at end of sentence"}. Match the surrounding tone and structure.${crossCtx}`;
-    const cfg = {
-      summarize: ["Summarize ONLY the selected text. Return a concise 2–3 sentence summary that captures the key points of what the user selected. Your response MUST be a direct condensation of the selection — do not add external context, opinions, or unrelated information. Preserve the main ideas. Do not truncate.", `${ctxBlock}\n\nFull note:\n\n${fullContext}`],
-      expand:    ["Expand with depth, context, examples in 4–6 sentences. Do not truncate. Use add_after. Your text must include leading newlines if starting a new paragraph.", `${ctxBlock}\n\nFull note:\n\n${fullContext}`],
-      explain:   ["Explain the selected term or phrase simply for a curious learner. Keep the original selection. Use add_after. Your explanation must flow naturally — use a parenthetical (like this), an em dash —, or a colon : depending on context. For mid-sentence: start your text with the connector, e.g. ' (i.e., ...)' or ' — '. For end of sentence: use ' — ' or newline for a new sentence. Do not truncate. Match the note tone.", ctxBlock],
-    };
     try {
-      const raw = await ai(llmProvider, apiKey, sys + " " + cfg[action][0], cfg[action][1], 900);
+      const raw = await ai(llmProvider, apiKey, sysPrompts[action], userMsg, 900);
       const cleaned = raw.replace(/```json|```/g, "").trim();
       const match = cleaned.match(/\{[\s\S]*\}/);
-      let parsed = { op: "replace", text: raw };
+      let parsed = { text: raw, explanation: "" };
       if (match) try { parsed = JSON.parse(match[0]); } catch { }
-      const op = ["replace", "add_after", "add_before", "delete"].includes(parsed.op) ? parsed.op : "replace";
       const text = (parsed.text ?? raw).trim();
-      let explanation = (parsed.explanation ?? "").trim();
-      if (!explanation) explanation = action === "expand" ? "Adding expanded content after your selection." : action === "summarize" ? "Replacing with a concise summary." : "Applying the suggested change.";
-      setSelRes({ action, text, op, explanation, original: t, start, end });
+      const explanation = (parsed.explanation ?? "").trim() ||
+        { summarize: "Replacing your selection with a concise summary.", expand: "Adding expanded content after your selection.", explain: "Adding a plain-language explanation after your selection." }[action];
+      setSelRes({ action, text, op, explanation, original: t, start, end, x, y, below });
     } catch { setSelRes(null); }
-    finally { busyWithSelAction.current = false; setBusy(false); setStatus(""); }
+    finally { busyWithSelAction.current = false; setSelThinking(null); }
   };
 
   const applySuggestion = async s => {
-    const currentContent = content; // capture at click-time before async gap
     setSugg(p => p.map(x => x.id === s.id ? { ...x, applying: true } : x));
-    setStatus("Weaving suggestion into notes…");
 
-    // Lecture suggestions with no textRef = brand-new content → append to end directly
-    if (s.cat === "lecture" && !s.textRef) {
-      const insertion = s.apply || s.detail;
-      const newContent = currentContent.trimEnd() + "\n\n" + insertion;
-      editorRef.current?.setEditorContent(newContent);
-      setSugg(p => p.filter(x => x.id !== s.id));
-      setStatus("");
-      lastScannedContent.current[activeId] = "";
-      clearTimeout(timers.current.s);
-      timers.current.s = setTimeout(() => generateSuggestions(activeId, newContent, notes), 2500);
-      return;
+    // Activate the pulsing highlight and the pill overlay on the affected text
+    if (s.textRef) {
+      editorRef.current?.setApplyingHighlight(s.textRef);
+      const pos = getPillPosition(s.textRef);
+      setApplyingOverlay({ cat: s.cat, ...(pos || { top: 80, left: window.innerWidth / 2 - 130 }) });
     }
 
-    const articlesJson = s.articles && Array.isArray(s.articles) && s.articles.length > 0
-      ? JSON.stringify(s.articles)
-      : "[]";
-
-    let newContent = null;
-    try {
-      const weaved = await ai(
-        llmProvider,
-        apiKey,
-        `You are SunnyD. Integrate a writing suggestion into the user's notes.
-
-Return ONLY the complete updated notes text — no preamble, no markdown fences, just the revised text.
-
-By type:
-- "fact": Replace the inaccurate passage with the corrected information.
-- "clarity": Rewrite the unclear passage to be clearer; preserve the original meaning.
-- "expand": Add the expanded content after the referenced paragraph, separated by a blank line.
-- "research": Add a brief inline citation AFTER the referenced section. Use the provided articles to create markdown links: [link text](url). Example: "Research supports this: [Smith et al., Nature 2020](https://doi.org/...)." Include 1-2 sentence context + links. Use REAL URLs from the articles.`,
-        `Suggestion type: ${s.cat}
-Referenced section: "${s.textRef || ""}"
-Suggestion: ${s.detail}
-${s.cat === "research" ? `Articles to cite (use these exact URLs): ${articlesJson}\n` : ""}
-Text to integrate (use as-is or adapt): ${s.apply || s.detail}
-
-Current notes:
-${currentContent}`,
-        1800
-      );
-
-      if (weaved.trim()) {
-        newContent = weaved.trim();
-        setContent(newContent);
-      }
-    } catch {
-      // Graceful fallback: simple positional insert
-      const insertion = s.apply || s.detail;
-      if (insertion && s.textRef) {
-        const idx = currentContent.indexOf(s.textRef);
-        if (idx !== -1) {
-          newContent = currentContent.slice(0, idx + s.textRef.length) + "\n\n" + insertion + currentContent.slice(idx + s.textRef.length);
-          setContent(newContent);
-          if (s.cat === "research" && s.textRef) dismissed.current.research.add(s.textRef.trim());
-          setSugg(p => p.filter(x => {
-            if (x.id === s.id) return false;
-            if (s.cat === "research" && x.cat === "research" && isSimilarToResearchedSection((x.textRef || "").trim())) return false;
-            return true;
-          }));
-          lastScannedContent.current[activeId] = "";
-          if (suggestionsOn && newContent) {
-            if (s.cat === "fact" && s.apply) {
-              dismissed.current.fact.add(s.apply.trim());
-              const appliedSents = newContent.match(/[A-Z][^.!?\n]{20,}[.!?]/g) || [];
-              const key = s.apply.trim().slice(0, 35);
-              for (const sent of appliedSents) {
-                if (key.length >= 15 && sent.includes(key.slice(0, 20))) dismissed.current.fact.add(sent.trim());
-              }
-            }
-            clearTimeout(timers.current.f);
-            clearTimeout(timers.current.s);
-            setTimeout(() => runFactCheck(newContent), 1500);
-            setTimeout(() => generateSuggestions(activeId, newContent, notes), 2500);
-          }
-          return;
+    /* Helper: dismiss pill + highlight with a smooth exit, flash inserted text, then housekeeping */
+    const finalize = (appliedText) => {
+      // Exit-animate the pill, then swap applying glow → inserted flash
+      setApplyingOverlay(prev => prev ? { ...prev, exiting: true } : null);
+      setTimeout(() => {
+        setApplyingOverlay(null);
+        editorRef.current?.clearApplyingHighlight();
+        // Blink-then-glow the newly inserted text so the user can see exactly what changed
+        const searchKey = (appliedText || "").trim();
+        if (searchKey) {
+          editorRef.current?.setInsertedHighlight(searchKey);
+          // Keep the glow for 9 seconds then silently clear
+          setTimeout(() => editorRef.current?.clearInsertedHighlight(), 9000);
         }
-      }
-      if (insertion) {
-        newContent = currentContent + "\n\n" + insertion;
-        setContent(newContent);
-      }
-    } finally {
+      }, 280);
       if (s.cat === "research" && s.textRef) dismissed.current.research.add(s.textRef.trim());
       setSugg(p => p.filter(x => {
         if (x.id === s.id) return false;
@@ -2102,11 +2533,11 @@ ${currentContent}`,
         return true;
       }));
       setStatus("");
-      if (newContent && suggestionsOn) {
+      if (suggestionsOn) {
         lastScannedContent.current[activeId] = "";
         if (s.cat === "fact" && s.apply) {
           dismissed.current.fact.add(s.apply.trim());
-          const appliedSents = newContent.match(/[A-Z][^.!?\n]{20,}[.!?]/g) || [];
+          const appliedSents = (appliedText || "").match(/[A-Z][^.!?\n]{20,}[.!?]/g) || [];
           const key = s.apply.trim().slice(0, 35);
           for (const sent of appliedSents) {
             if (key.length >= 15 && sent.includes(key.slice(0, 20))) dismissed.current.fact.add(sent.trim());
@@ -2114,9 +2545,77 @@ ${currentContent}`,
         }
         clearTimeout(timers.current.f);
         clearTimeout(timers.current.s);
-        setTimeout(() => runFactCheck(newContent), 1500);
-        setTimeout(() => generateSuggestions(activeId, newContent, notes), 2500);
+        setTimeout(() => runFactCheck(editorRef.current?.getEditorContent() || content), 1500);
+        setTimeout(() => generateSuggestions(activeId, editorRef.current?.getEditorContent() || content, notes), 2500);
       }
+    };
+
+    // ── Lecture / expand with no textRef → append rich content to end ──────────
+    if ((s.cat === "lecture" || s.cat === "expand") && !s.textRef) {
+      const insertion = s.apply || s.detail;
+      editorRef.current?.appendContent(mdToHtml(insertion));
+      finalize(insertion);
+      return;
+    }
+
+    const textRef = s.textRef;
+    const insertion = s.apply || s.detail;
+
+    // ── Expand: insert rich content after the referenced section ─────────────
+    if (s.cat === "expand") {
+      const html = mdToHtml(insertion);
+      const ok = textRef ? editorRef.current?.insertAfterText(textRef, html) : false;
+      if (!ok) editorRef.current?.appendContent(html);
+      finalize(insertion);
+      return;
+    }
+
+    // ── Research: insert citation after the referenced section ────────────────
+    if (s.cat === "research") {
+      const html = mdToHtml(insertion);
+      const ok = textRef ? editorRef.current?.insertAfterText(textRef, html) : false;
+      if (!ok) editorRef.current?.appendContent(html);
+      finalize(insertion);
+      return;
+    }
+
+    // ── Fact / clarity: ask LLM to rewrite ONLY the affected passage ─────────
+    setStatus("Weaving suggestion into notes…");
+    try {
+      let systemPrompt, userPrompt;
+      if (s.cat === "fact") {
+        systemPrompt = `You are a writing assistant. Fix a factual error in the given passage.
+Return ONLY the corrected passage — no preamble, no explanation. Match the tone and style of the original.
+You MAY use markdown (**bold**, *italic*, ## Heading 2, - bullet, \`code\`) if it genuinely improves clarity, but plain prose is fine too.`;
+        userPrompt = `Original passage: "${textRef}"
+Factual correction: ${s.detail}
+Corrected text to use (adapt to fit naturally): ${s.apply || s.detail}
+Return the corrected passage only:`;
+      } else {
+        systemPrompt = `You are a writing assistant. Rewrite the given passage to be clearer and more readable.
+Return ONLY the rewritten passage — no preamble, no explanation. Preserve the original meaning, tone, and length.
+You MAY use markdown (**bold**, *italic*, ## Heading 2, - bullet, \`code\`) if it genuinely improves clarity, but plain prose is fine too.`;
+        userPrompt = `Original passage: "${textRef}"
+Clarity suggestion: ${s.detail}
+Return the rewritten passage only:`;
+      }
+
+      const replacement = await ai(llmProvider, apiKey, systemPrompt, userPrompt, 600);
+      if (replacement.trim() && textRef) {
+        const ok = editorRef.current?.findAndReplaceText(textRef, mdToHtml(replacement.trim()));
+        if (!ok) editorRef.current?.appendContent(mdToHtml(replacement.trim()));
+      } else if (replacement.trim()) {
+        editorRef.current?.appendContent(mdToHtml(replacement.trim()));
+      }
+      finalize(replacement.trim());
+    } catch {
+      if (insertion && textRef) {
+        const ok = editorRef.current?.findAndReplaceText(textRef, mdToHtml(insertion));
+        if (!ok) editorRef.current?.appendContent(mdToHtml(insertion));
+      } else if (insertion) {
+        editorRef.current?.appendContent(mdToHtml(insertion));
+      }
+      finalize(insertion);
     }
   };
 
@@ -2124,18 +2623,26 @@ ${currentContent}`,
     if (!selRes) return;
     clearTimeout(timers.current.s);
     clearTimeout(timers.current.f);
-    const { start, end, text, op } = selRes;
-    let next = content; // plain text manipulation
-    if (op === "replace") next = content.slice(0, start) + text + content.slice(end);
-    else if (op === "add_after") next = content.slice(0, end) + (text || "") + content.slice(end);
-    else if (op === "add_before") next = content.slice(0, start) + (text || "") + content.slice(start);
-    else if (op === "delete") next = content.slice(0, start) + (text || "") + content.slice(end);
-    editorRef.current?.setEditorContent(next);
+    const { original, text, op } = selRes;
+    const html = mdToHtml(text);
+    // Use Tiptap surgical methods — never slice plain-text (that destroys HTML formatting)
+    if (op === "replace") {
+      editorRef.current?.findAndReplaceText(original, html);
+    } else if (op === "add_after") {
+      editorRef.current?.insertAfterText(original, html);
+    } else if (op === "add_before") {
+      // insertAfterText doesn't support before; fall back to find-replace with original prepended
+      editorRef.current?.findAndReplaceText(original, html + "<p>" + original + "</p>");
+    } else if (op === "delete") {
+      editorRef.current?.findAndReplaceText(original, html || "");
+    }
+    // Flash the applied text so user can see exactly what changed
+    setTimeout(() => editorRef.current?.setInsertedHighlight(text.slice(0, 60).trim()), 120);
     setSelRes(null);
     lastScannedContent.current[activeId] = "";
     if (suggestionsOn) {
-      setTimeout(() => runFactCheck(next), 1500);
-      setTimeout(() => generateSuggestions(activeId, next, notes), 2500);
+      setTimeout(() => runFactCheck(content), 1500);
+      setTimeout(() => generateSuggestions(activeId, content, notes), 2500);
     }
   };
 
@@ -2305,10 +2812,11 @@ ${currentContent}`,
     const onKey = e => {
       if (e.key === "Escape" && dockedCard) closeDocked();
       if (e.key === "Escape" && selRes) setSelRes(null);
+      if (e.key === "Escape" && selMenu) setSelMenu(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dockedCard, selRes]);
+  }, [dockedCard, selRes, selMenu]);
 
   /* ── Global ⌘K / Ctrl+K to toggle search palette ── */
   useEffect(() => {
@@ -2340,7 +2848,7 @@ ${currentContent}`,
   useEffect(() => {
     if (!apiKey) return;
     checked.current = new Set();
-    setGhost(null); setGhostThinking(false); setSelRes(null); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
+    setGhost(null); setGhostThinking(false); setSelRes(null); setSelMenu(null); setSelThinking(null); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
     const snapNotes = notes;
     const t1 = suggestionsOn ? setTimeout(() => runFactCheck(content), 2500) : null;
     const t3 = suggestionsOn ? setTimeout(() => generateSuggestions(activeId, content, snapNotes), 5000) : null;
@@ -2414,14 +2922,26 @@ ${currentContent}`,
           }
         }
       }
+      // Sort by computed position (nulls go to end)
       const sorted = [...sugg].sort((a, b) => (positions[a.id] ?? 9999) - (positions[b.id] ?? 9999));
+      // Assign fallback positions to null-textRef cards so they participate in collision avoidance
+      let lastAssigned = 0;
+      for (let i = 0; i < sorted.length; i++) {
+        if (positions[sorted[i].id] == null) {
+          positions[sorted[i].id] = Math.max(0, lastAssigned);
+        } else {
+          lastAssigned = positions[sorted[i].id];
+        }
+      }
+      // Re-sort after filling nulls, then apply collision avoidance in a single forward pass
+      sorted.sort((a, b) => positions[a.id] - positions[b.id]);
+      // Clamp first card to minimum 0
+      if (sorted.length > 0) positions[sorted[0].id] = Math.max(0, positions[sorted[0].id]);
       for (let i = 1; i < sorted.length; i++) {
-        const prev = sorted[i - 1];
-        const curr = sorted[i];
-        const prevTop = positions[prev.id];
-        const currTop = positions[curr.id];
-        if (prevTop != null && currTop != null && currTop < prevTop + MIN_SPACING) {
-          positions[curr.id] = prevTop + MIN_SPACING;
+        const prevTop = positions[sorted[i - 1].id];
+        const currTop = positions[sorted[i].id];
+        if (currTop < prevTop + MIN_SPACING) {
+          positions[sorted[i].id] = prevTop + MIN_SPACING;
         }
       }
       setSuggTops(prev => {
@@ -2454,15 +2974,33 @@ ${currentContent}`,
     };
   }, [recalcSuggTops]);
 
+  /* ── Wire hover/docked → editor highlight (skip while applying) ── */
+  useEffect(() => {
+    if (applyingSugg) return; // applying highlight takes precedence
+    // Docked card keeps its textRef highlighted even after mouse leaves
+    const dockedRef = dockedCard?.suggestion?.textRef;
+    if (dockedRef) {
+      editorRef.current?.setHoverHighlight(dockedRef);
+      return;
+    }
+    // Hover highlight
+    const hovRef = activeSugg.find(s => s.id === hoveredSuggId)?.textRef;
+    if (hovRef) {
+      editorRef.current?.setHoverHighlight(hovRef);
+    } else {
+      editorRef.current?.clearHoverHighlight();
+    }
+  }, [hoveredSuggId, activeSugg, applyingSugg, dockedCard]);
+
   // Skeletons only show while AI is generating suggestions — NOT when user runs selection actions (expand/summarize/explain)
   const showThinking = busy && activeSugg.length === 0 && !busyWithSelAction.current;
 
   const wc = (content.match(/\S+/g) || []).length;
 
   const SEL_ACTS = [
-    { key: "summarize", icon: "◈", label: "Summarize", desc: "Condense into key points" },
-    { key: "expand",    icon: "⊕", label: "Expand",    desc: "Add depth and context" },
-    { key: "explain",   icon: "◉", label: "Explain",   desc: "Break it down simply" },
+    { key: "summarize", icon: "◈", label: "Summarize" },
+    { key: "expand",    icon: "⊕", label: "Expand"    },
+    { key: "explain",   icon: "◉", label: "Explain"   },
   ];
 
   if (!apiKey) return <><style>{CSS}</style><KeyScreen onSave={saveKeys} /></>;
@@ -2492,8 +3030,10 @@ ${currentContent}`,
                   onClick={() => setLectureOn(p => !p)}
                   title={lectureOn ? "Stop live transcription" : "Start live transcription"}
                 >
-                  <span className="lecture-btn-ic">{lectureOn && listening ? "●" : "◉"}</span>
-                  <span>Lecture</span>
+                  {lectureOn && listening && !lecturePaused
+                    ? <span className="lecture-rec-dot" style={{ width: 7, height: 7 }} />
+                    : <span className="lecture-btn-ic">◉</span>}
+                  <span>{lectureOn ? (lecturePaused ? "Paused" : "Recording") : "Lecture"}</span>
                 </button>
                 <span className="hdr-sep" />
               </>
@@ -2531,24 +3071,54 @@ ${currentContent}`,
 
         {lectureOn && (
           <div className="lecture-panel">
+            {/* Header row: status label + action buttons */}
             <div className="lecture-panel-hdr">
               <span className="lecture-panel-lbl">
-                {listening ? "Live transcription" : "Paused — click Lecture to resume"}
+                {listening && !lecturePaused
+                  ? <><span className="lecture-rec-dot" />Live transcription</>
+                  : <span style={{ opacity: .65 }}>⏸ Paused</span>}
               </span>
               <div className="lecture-panel-actions">
+                <button className="lecture-pause-btn" onClick={() => setLecturePaused(p => !p)}>
+                  {lecturePaused ? "▶ Resume" : "⏸ Pause"}
+                </button>
                 <button className="lecture-panel-btn" onClick={() => setShowFullTranscript(p => !p)}>
-                  {showFullTranscript ? "Hide full transcript" : "View full transcript"}
+                  {showFullTranscript ? "Collapse" : "Expand"}
                 </button>
                 <button className="lecture-panel-btn" onClick={() => {
                   resetTranscript();
                   setLectureQs([]);
                   setActiveLectureQ(null);
+                  setNotedQIds(new Set());
+                  setLectureSecs(0);
                   scannedTranscriptRef.current = "";
                   scannedLectureSuggRef.current = "";
                   setSugg(p => p.filter(s => s.cat !== "lecture"));
                 }}>Clear</button>
               </div>
             </div>
+
+            {/* Stats row */}
+            {(finalTranscript || lectureSecs > 0) && (
+              <div className="lecture-stats">
+                <span className="lecture-stat">
+                  <span>Duration</span>
+                  <span className="lecture-stat-val">{fmtDuration(lectureSecs)}</span>
+                </span>
+                <span className="lecture-stat">
+                  <span>Words</span>
+                  <span className="lecture-stat-val">{(finalTranscript.match(/\S+/g) || []).length}</span>
+                </span>
+                {lectureQs.length > 0 && (
+                  <span className="lecture-stat">
+                    <span>Questions</span>
+                    <span className="lecture-stat-val" style={{ color: "#5E38A0" }}>{lectureQs.length}</span>
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Transcript */}
             <div className={`lecture-transcript${showFullTranscript ? " expanded" : ""}`}>
               {transcript ? (
                 <p className="lecture-text">
@@ -2557,101 +3127,130 @@ ${currentContent}`,
                   <span ref={transcriptEndRef} />
                 </p>
               ) : (
-                <p className="lecture-placeholder">Speak to see transcription… Detected questions will be highlighted.</p>
+                <p className="lecture-placeholder">
+                  {lecturePaused
+                    ? "Transcription paused. Click Resume to continue capturing."
+                    : "Speak to see live transcription. Questions are automatically highlighted."}
+                </p>
               )}
             </div>
+
+            {/* Footer: question badge + expand hint */}
             {lectureQs.length > 0 && (
-              <div className="lecture-q-count">
-                {lectureQs.length} question{lectureQs.length > 1 ? "s" : ""} detected — click to see suggested responses
+              <div className="lecture-footer">
+                <span className="lecture-q-count">
+                  {lectureQs.filter(q => notedQIds.has(q.id)).length > 0
+                    ? `${lectureQs.filter(q => notedQIds.has(q.id)).length}/${lectureQs.length} questions added to notes`
+                    : `${lectureQs.length} question${lectureQs.length > 1 ? "s" : ""} — click to respond`}
+                </span>
+                {!showFullTranscript && finalTranscript && (
+                  <span style={{ fontSize: 10, color: "var(--ink3)", cursor: "pointer" }} onClick={() => setShowFullTranscript(true)}>
+                    Show full transcript ↓
+                  </span>
+                )}
               </div>
             )}
           </div>
         )}
 
         {/* Lecture question answer card */}
-        {activeLectureQ && (
-          <div
-            className="lecture-q-card"
-            style={{
-              top: Math.min(activeLectureQ.y + 12, window.innerHeight - 280),
-              left: Math.min(Math.max(activeLectureQ.x - 160, 12), window.innerWidth - 370),
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="lecture-q-card-hdr">
-              <span className="lecture-q-badge">Suggested response</span>
-              <button className="x-btn" onClick={() => setActiveLectureQ(null)}>×</button>
-            </div>
-            <div className="lecture-q-question">"{activeLectureQ.q.text}"</div>
-            {lectureQRefreshing ? (
-              <div className="lecture-q-loading">
-                <ThinkDots />
-                <span>Refreshing response…</span>
+        {activeLectureQ && (() => {
+          const q = activeLectureQ.q;
+          const isNoted = notedQIds.has(q.id);
+          // Smart positioning: prefer below-right of click, but keep fully on screen
+          const cardW = 370, cardH = 280;
+          const cardLeft = Math.max(12, Math.min(activeLectureQ.x - 40, window.innerWidth - cardW - 12));
+          const cardTop  = activeLectureQ.y + 16 + cardH > window.innerHeight
+            ? Math.max(10, activeLectureQ.y - cardH - 8)
+            : activeLectureQ.y + 16;
+          return (
+            <div
+              className="lecture-q-card"
+              style={{ top: cardTop, left: cardLeft }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="lecture-q-card-hdr">
+                <span className="lecture-q-badge">{isNoted ? "✓ Added to notes" : "Suggested response"}</span>
+                <button className="x-btn" onClick={() => { setActiveLectureQ(null); setLectureQCopied(false); setLectureQAdded(false); }}>×</button>
               </div>
-            ) : activeLectureQ.q.answer ? (
-              <>
-                <div className="lecture-q-answer">{activeLectureQ.q.answer}</div>
-                <div className="lecture-q-btns">
-                  <button className="btn-apply" style={{ fontSize: 11, padding: "7px 16px" }}
-                    onClick={() => {
-                      const text = `Q: ${activeLectureQ.q.text}\n${activeLectureQ.q.answer}`;
-                      navigator.clipboard.writeText(text).catch(() => {
-                        const el = document.createElement("textarea");
-                        el.value = text;
-                        document.body.appendChild(el);
-                        el.select();
-                        document.execCommand("copy");
-                        document.body.removeChild(el);
-                      });
-                      setLectureQCopied(true);
-                      setTimeout(() => setLectureQCopied(false), 1800);
-                    }}>
-                    {lectureQCopied ? "Copied!" : "Copy"}
-                  </button>
-                  <button className="lecture-q-refresh-btn" title="Regenerate response"
-                    onClick={async () => {
-                      const qId = activeLectureQ.q.id;
-                      const qText = activeLectureQ.q.text;
-                      setLectureQRefreshing(true);
-                      try {
-                        const noteContext = notes.map(n => `[${n.title}]:\n${n.content.slice(0, 400)}`).join("\n\n");
-                        const raw = await ai(
-                          llmProvider, apiKey,
-                          `You analyze live lecture transcripts to detect genuine spoken questions and generate helpful responses.
-Return ONLY valid JSON, no markdown.
-Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sentences the student could say to contribute, grounded in their notes"}]}`,
-                          `Question: "${qText}"\n\nStudent's notes for context:\n${noteContext.slice(0, 1200)}`,
-                          500
-                        );
-                        const m = raw.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
-                        const parsed = m ? JSON.parse(m[0]) : null;
-                        const newAnswer = parsed?.questions?.[0]?.answer?.trim() || activeLectureQ.q.answer;
-                        setLectureQs(prev => prev.map(q => q.id === qId ? { ...q, answer: newAnswer } : q));
-                        setActiveLectureQ(prev => prev ? { ...prev, q: { ...prev.q, answer: newAnswer } } : prev);
-                      } catch { /* keep old answer on failure */ }
-                      finally { setLectureQRefreshing(false); }
-                    }}>
-                    ↺
-                  </button>
-                  <button className="btn-decline" style={{ fontSize: 11, padding: "7px 14px" }}
-                    onClick={() => {
-                      const qId = activeLectureQ.q.id;
-                      setLectureQs(prev => prev.filter(q => q.id !== qId));
-                      setActiveLectureQ(null);
-                      setLectureQCopied(false);
-                    }}>
-                    Dismiss
-                  </button>
+
+              {/* Question quote */}
+              <div className="lecture-q-question">{q.text}</div>
+
+              {/* Answer / loading */}
+              {(lectureQRefreshing || lectureQGenerating) ? (
+                <div className="lecture-q-loading">
+                  <ThinkDots />
+                  <span>{lectureQRefreshing ? "Regenerating…" : "Drafting response…"}</span>
                 </div>
-              </>
-            ) : (
-              <div className="lecture-q-loading">
-                <ThinkDots />
-                <span>Generating response…</span>
-              </div>
-            )}
-          </div>
-        )}
+              ) : q.answer ? (
+                <>
+                  <div className="lecture-q-answer">{q.answer}</div>
+                  <div className="lecture-q-btns">
+                    {/* Primary: Add to Notes */}
+                    <button
+                      className={`lecture-q-add-btn${lectureQAdded || isNoted ? " noted" : ""}`}
+                      onClick={() => {
+                        if (isNoted) return;
+                        addQuestionToNotes(q);
+                        setLectureQAdded(true);
+                        setTimeout(() => { setActiveLectureQ(null); setLectureQAdded(false); }, 1200);
+                      }}
+                    >
+                      {lectureQAdded || isNoted ? "✓ Added to notes" : "＋ Add to Notes"}
+                    </button>
+
+                    {/* Copy */}
+                    <button
+                      className="lecture-panel-btn"
+                      style={{ flexShrink: 0 }}
+                      onClick={() => {
+                        const txt = `Q: ${q.text}\n${q.answer}`;
+                        navigator.clipboard.writeText(txt).catch(() => {
+                          const el = document.createElement("textarea");
+                          el.value = txt; document.body.appendChild(el); el.select();
+                          document.execCommand("copy"); document.body.removeChild(el);
+                        });
+                        setLectureQCopied(true);
+                        setTimeout(() => setLectureQCopied(false), 1800);
+                      }}
+                    >
+                      {lectureQCopied ? "Copied!" : "Copy"}
+                    </button>
+
+                    {/* Refresh */}
+                    <button
+                      className="lecture-q-refresh-btn"
+                      title="Regenerate response"
+                      onClick={async () => {
+                        const qId = q.id; const qText = q.text;
+                        setLectureQRefreshing(true);
+                        try {
+                          const noteContext = notes.map(n => `[${n.title}]:\n${htmlToText(n.content).slice(0, 400)}`).join("\n\n");
+                          const raw = await ai(
+                            llmProvider, apiKey,
+                            `You help students contribute to class discussions. Given a question from a lecture and the student's notes, write a concise grounded response.
+Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
+                            `Question: "${qText}"\n\nStudent notes:\n${noteContext.slice(0, 1200)}`,
+                            400
+                          );
+                          const m = raw.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
+                          const parsed = m ? JSON.parse(m[0]) : null;
+                          const newAnswer = parsed?.answer?.trim() || q.answer;
+                          setLectureQs(prev => prev.map(x => x.id === qId ? { ...x, answer: newAnswer } : x));
+                          setActiveLectureQ(prev => prev ? { ...prev, q: { ...prev.q, answer: newAnswer } } : prev);
+                        } catch {}
+                        finally { setLectureQRefreshing(false); }
+                      }}
+                    >↺</button>
+                  </div>
+                </>
+              ) : (
+                <div className="lecture-q-loading"><ThinkDots /><span>Drafting response…</span></div>
+              )}
+            </div>
+          );
+        })()}
 
         <div className="sugg-freq-bar">
           <span className="sugg-freq-lbl">Suggestions:</span>
@@ -2675,13 +3274,13 @@ Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sente
               <button className="new-btn" onClick={() => {
                 const id = Date.now();
                 setNotes(p => [...p, { id, title: "Untitled", content: "" }]);
-                setActiveId(id); setPop(null); setGhost(null); setSelRes(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
+                setActiveId(id); setPop(null); setGhost(null); setSelRes(null); setSelMenu(null); setSelThinking(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
               }}>+ New Note</button>
               <button className="search-btn" title="Search notes (⌘K)" onClick={() => setSearchOpen(true)}>⌕</button>
             </div>
             {notes.map(n => (
               <div key={n.id} className={`note-row${n.id === activeId ? " on" : ""}`}
-                onClick={() => { setActiveId(n.id); setGhost(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); }}>
+                onClick={() => { setActiveId(n.id); setGhost(null); setGhostThinking(false); setSelMenu(null); setSelThinking(null); setSelRes(null); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); }}>
                 <div className="nr-pip" />
                 <span className="nr-lbl">{n.title || "Untitled"}</span>
               </div>
@@ -2723,7 +3322,7 @@ Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sente
                   {activeSugg.length > 0 && <span className="ann-badge">{activeSugg.length} suggestions</span>}
                 </div>
                 <div className="divider" />
-                <div className="ta-wrap">
+                <div className={`ta-wrap${dockedCard ? " docked-open" : ""}`}>
                   <NoteEditor
                     key={activeId}
                     ref={editorRef}
@@ -2731,21 +3330,35 @@ Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sente
                     onChange={handleEditorChange}
                     onKeyDown={handleKeyDown}
                   />
-                  {applyingSugg && (
-                    <div className="weave-overlay weave-overlay-fixed">
-                      <div className="weave-typing">
-                        <TypeWriter text={((applyingSugg.apply || applyingSugg.detail) || "Weaving…").slice(0, 280)} speed={18} />
-                        <span className="weave-cursor" />
-                      </div>
-                    </div>
+                  {/* Weave pill rendered via portal — anchored to the affected text */}
+                  {applyingOverlay && createPortal(
+                    (() => {
+                      const cat = CATS[applyingOverlay.cat] || CATS.expand;
+                      const msgs = {
+                        fact:     "Correcting passage",
+                        clarity:  "Clarifying passage",
+                        expand:   "Expanding section",
+                        research: "Adding citation",
+                        lecture:  "Inserting notes",
+                      };
+                      return (
+                        <div
+                          className={`weave-pill${applyingOverlay.exiting ? " exiting" : ""}`}
+                          style={{ top: applyingOverlay.top, left: applyingOverlay.left }}
+                        >
+                          <span className="weave-pill-dot" style={{ background: cat.color }} />
+                          <span className="weave-pill-label" style={{ color: cat.color }}>{cat.label}</span>
+                          <span className="weave-pill-sep">·</span>
+                          <span className="weave-pill-msg">{msgs[applyingOverlay.cat] || "Updating"}</span>
+                          <span className="weave-pill-dots" style={{ color: cat.color }}>
+                            <span /><span /><span />
+                          </span>
+                        </div>
+                      );
+                    })(),
+                    document.body
                   )}
-                  {selRes && (
-                    <div className="sel-result-bar" onClick={e => e.stopPropagation()}>
-                      <span className="sel-result-expl">{selRes.explanation}</span>
-                      <button className="btn-fill sel-result-apply" onClick={weaveSelResult}>✓ Apply</button>
-                      <button className="btn-out" onClick={() => setSelRes(null)}>Dismiss</button>
-                    </div>
-                  )}
+                  {/* Result card is now a floating portal — rendered elsewhere */}
                 </div>
 
                 {/* Hint bar: shows Tab/Esc when ghost is visible */}
@@ -2777,7 +3390,7 @@ Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sente
                 <div
                   ref={panelBodyRef}
                   className="ann-col-body"
-                  style={{ minHeight: sortedSugg.length > 0 ? sortedSugg.length * MIN_SPACING + 100 : 0 }}
+                  style={{ minHeight: sortedSugg.length > 0 ? Math.max(sortedSugg.length * MIN_SPACING, ...sortedSugg.map((s, i) => (suggTops[s.id] ?? i * MIN_SPACING) + SUGG_CARD_H)) + 60 : 0 }}
                 >
                   {sortedSugg.map((s, index) => (
                     <div
@@ -2814,17 +3427,78 @@ Schema: {"questions":[{"text":"exact phrase from transcript","answer":"1-2 sente
         </div>
 
         {/* Selection card */}
+        {/* ── Compact selection toolbar ── */}
         {selMenu && (
-          <div className="sel-card" style={{ left: selMenu.x, top: Math.max(10, selMenu.y - 148) }} onClick={e => e.stopPropagation()}>
-            <div className="sel-hd">What should SunnyD do?</div>
-            {SEL_ACTS.map(({ key, icon, label, desc }) => (
-              <button key={key} className="sel-act" onClick={() => handleSelAction(key)}>
-                <div className="sel-act-ic">{icon}</div>
-                <div><div className="sel-act-lbl">{label}</div><div className="sel-act-desc">{desc}</div></div>
-              </button>
+          <div
+            className="sel-toolbar"
+            style={{
+              left: selMenu.x,
+              // below=true means selection is near top → place toolbar below
+              top: selMenu.below ? selMenu.y : Math.max(8, selMenu.y - 40),
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            {SEL_ACTS.map(({ key, icon, label }, i) => (
+              <React.Fragment key={key}>
+                {i > 0 && <div className="sel-toolbar-sep" />}
+                <button className="sel-toolbar-btn" onClick={() => handleSelAction(key)}>
+                  <span className="sel-toolbar-btn-ic">{icon}</span>
+                  {label}
+                </button>
+              </React.Fragment>
             ))}
           </div>
         )}
+
+        {/* ── Thinking pill while AI processes ── */}
+        {selThinking && (
+          <div
+            className="sel-thinking-pill"
+            style={{
+              left: selThinking.x,
+              top: selThinking.below ? selThinking.y : Math.max(8, selThinking.y - 40),
+            }}
+          >
+            <span style={{ fontSize: 13 }}>◌</span>
+            {{ summarize: "Summarizing…", expand: "Expanding…", explain: "Explaining…" }[selThinking.action]}
+          </div>
+        )}
+
+        {/* ── Floating result preview card ── */}
+        {selRes && (() => {
+          const cardW = 420;
+          const vpW = window.innerWidth;
+          const vpH = window.innerHeight;
+          // Anchor card below the thinking pill / toolbar position
+          let cardLeft = Math.min(Math.max(8, selRes.x - cardW / 2), vpW - cardW - 8);
+          const toolbarBottom = selRes.below ? selRes.y + 40 : selRes.y + 6;
+          let cardTop = toolbarBottom + 10;
+          if (cardTop + 320 > vpH) cardTop = Math.max(8, selRes.y - 340);
+          return (
+            <div
+              className="sel-result-card"
+              style={{ left: cardLeft, top: cardTop }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="sel-result-hdr">
+                <span className="sel-result-badge">
+                  {{ summarize: "◈ Summarize", expand: "⊕ Expand", explain: "◉ Explain" }[selRes.action]}
+                </span>
+                <span className={`sel-result-op ${selRes.op === "replace" ? "replace" : "add"}`}>
+                  {selRes.op === "replace" ? "replaces" : "adds after"}
+                </span>
+                <span className="sel-result-orig">"{selRes.original.slice(0, 55)}{selRes.original.length > 55 ? "…" : ""}"</span>
+                <button className="sel-result-close" onClick={() => setSelRes(null)}>×</button>
+              </div>
+              <div className="sel-result-body" dangerouslySetInnerHTML={{ __html: mdToHtml(selRes.text) }} />
+              {selRes.explanation && <div className="sel-result-expl">{selRes.explanation}</div>}
+              <div className="sel-result-btns">
+                <button className="btn-fill" style={{ flex: 1 }} onClick={weaveSelResult}>✓ Apply</button>
+                <button className="btn-out" onClick={() => setSelRes(null)}>Dismiss</button>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Annotation popover — questions only (fact-checks are in right panel) */}
         {/* Floating docked card */}
