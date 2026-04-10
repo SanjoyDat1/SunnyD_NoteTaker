@@ -3166,6 +3166,15 @@ Return the rewritten passage only:`;
     return () => window.removeEventListener("keydown", onKey);
   }, [dockedCard, selRes, selMenu, noteSetupModal]);
 
+  /* ── Dismiss selection toolbar on scroll ── */
+  useEffect(() => {
+    const el = mainAreaRef.current;
+    if (!el || !selMenu) return;
+    const onScroll = () => setSelMenu(null);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [selMenu]);
+
   /* ── Global ⌘K / Ctrl+K to toggle search palette ── */
   useEffect(() => {
     const isMac = navigator.platform.toUpperCase().includes("MAC");
