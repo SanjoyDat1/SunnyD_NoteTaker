@@ -1070,6 +1070,79 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .x-btn{background:none;border:none;color:#C0B8AE;cursor:pointer;font-size:18px;line-height:1;padding:0 2px;transition:color .13s;}
 .x-btn:hover{color:var(--ink2);}
 
+/* ── Note setup modal ── */
+.note-setup-overlay{
+  position:fixed;inset:0;z-index:11000;
+  background:rgba(30,20,10,.45);backdrop-filter:blur(4px);
+  display:flex;align-items:center;justify-content:center;
+  animation:fadeIn .18s ease;
+}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.note-setup-modal{
+  width:440px;max-width:calc(100vw - 32px);
+  background:var(--page);border:1px solid var(--rule2);border-radius:16px;
+  box-shadow:0 24px 64px rgba(50,35,15,.22),0 8px 24px rgba(50,35,15,.12);
+  overflow:hidden;animation:cardRise .25s cubic-bezier(.22,1,.36,1);
+}
+.note-setup-hdr{
+  padding:20px 22px 16px;
+  background:linear-gradient(135deg,#FDF8F2 0%,#F7F0E6 100%);
+  border-bottom:1px solid var(--rule);
+}
+.note-setup-hdr-top{display:flex;align-items:center;gap:10px;margin-bottom:5px;}
+.note-setup-icon{font-size:22px;line-height:1;}
+.note-setup-title{font-size:16px;font-weight:700;color:var(--ink);letter-spacing:-.01em;}
+.note-setup-sub{font-size:12.5px;color:var(--ink3);line-height:1.5;}
+.note-setup-body{padding:20px 22px 8px;display:flex;flex-direction:column;gap:14px;}
+.note-setup-field{display:flex;flex-direction:column;gap:5px;}
+.note-setup-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);}
+.note-setup-input{
+  padding:9px 12px;
+  background:var(--paper);border:1.5px solid var(--rule2);border-radius:8px;
+  font-family:'DM Sans',sans-serif;font-size:13.5px;color:var(--ink);
+  transition:border-color .15s,box-shadow .15s;outline:none;
+}
+.note-setup-input::placeholder{color:var(--ink3);opacity:.7;}
+.note-setup-input:focus{border-color:rgba(197,120,0,.55);box-shadow:0 0 0 3px rgba(197,120,0,.1);}
+.note-setup-footer{
+  padding:14px 22px 18px;
+  display:flex;align-items:center;justify-content:flex-end;gap:10px;
+  border-top:1px solid var(--rule);margin-top:8px;
+}
+.note-setup-skip{
+  font-size:12.5px;color:var(--ink3);background:none;border:none;
+  cursor:pointer;font-family:'DM Sans',sans-serif;font-weight:500;
+  padding:7px 12px;border-radius:7px;transition:color .12s,background .12s;
+}
+.note-setup-skip:hover{color:var(--ink);background:var(--paper);}
+.note-setup-go{
+  padding:8px 22px;background:linear-gradient(135deg,#C57800,#A85F00);
+  color:#fff;border:none;border-radius:8px;
+  font-family:'DM Sans',sans-serif;font-size:13px;font-weight:600;
+  cursor:pointer;transition:opacity .15s,transform .15s;
+  box-shadow:0 3px 10px rgba(165,95,0,.28);letter-spacing:.01em;
+}
+.note-setup-go:hover{opacity:.9;transform:translateY(-1px);}
+
+/* ── Note metadata bar (below title) ── */
+.note-meta-chips{
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  padding:4px 0 6px;
+}
+.note-meta-chip{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:3px 9px;border-radius:20px;
+  background:rgba(197,120,0,.08);border:1px solid rgba(197,120,0,.2);
+  font-size:11.5px;color:var(--ink2);font-weight:500;
+}
+.note-meta-chip-icon{font-size:11px;opacity:.7;}
+.note-meta-edit-btn{
+  background:none;border:none;cursor:pointer;
+  font-size:12px;color:var(--ink3);padding:2px 5px;border-radius:5px;
+  transition:color .12s,background .12s;line-height:1;
+}
+.note-meta-edit-btn:hover{color:var(--ink);background:var(--paper);}
+
 /* ── Selection toolbar (compact dark floating bar) ── */
 .sel-toolbar{
   position:fixed;z-index:9999;
@@ -1735,6 +1808,8 @@ export default function SunnyDNotes() {
   const [lectureQRefreshing, setLectureQRefreshing] = useState(false);
   const [lectureQGenerating, setLectureQGenerating] = useState(false); // auto-generating missing answer
   const [lectureQExpanding,  setLectureQExpanding]  = useState(false); // generating long expanded answer
+  // Note setup modal — null = hidden; pendingId = number means creating new note; null pendingId = editing existing
+  const [noteSetupModal, setNoteSetupModal] = useState(null); // { pendingId, subject, professor, goal }
   const [notedQIds, setNotedQIds] = useState(new Set()); // Q IDs added to notes
   const [lectureSecs, setLectureSecs] = useState(0); // session duration counter
   const lectureTimerRef = useRef(null);
@@ -1813,6 +1888,57 @@ export default function SunnyDNotes() {
   // setContent: sets editor content (and the editor's onChange updates notes via handleEditorChange)
   const setContent = v => { editorRef.current?.setEditorContent(v); };
   const setTitle   = v => setNotes(p => p.map(n => n.id === activeId ? { ...n, title:   v } : n));
+
+  /* ── Note metadata helpers ── */
+  // Returns a context block injected into AI prompts when metadata is set
+  function noteMetaBlock(n) {
+    const parts = [];
+    if (n?.subject)   parts.push(`Subject / Course: ${n.subject}`);
+    if (n?.professor) parts.push(`Professor: ${n.professor}`);
+    if (n?.goal)      parts.push(`Student's goal: ${n.goal}`);
+    return parts.length ? `\n\n${parts.join('\n')}` : '';
+  }
+
+  // Open the setup modal for creating a new note (pendingId = future note id)
+  function openNewNoteSetup() {
+    const pendingId = Date.now();
+    setNoteSetupModal({ pendingId, subject: '', professor: '', goal: '' });
+  }
+
+  // Open for editing existing note metadata
+  function openEditNoteMeta() {
+    setNoteSetupModal({
+      pendingId: null,
+      subject:   note?.subject   || '',
+      professor: note?.professor || '',
+      goal:      note?.goal      || '',
+    });
+  }
+
+  // Confirm: create new note (if pendingId) or update existing note metadata
+  function confirmNoteSetup(skip = false) {
+    if (!noteSetupModal) return;
+    const { pendingId, subject, professor, goal } = noteSetupModal;
+    if (pendingId !== null) {
+      // Creating a new note
+      const meta = skip ? {} : { subject: subject.trim(), professor: professor.trim(), goal: goal.trim() };
+      const newNote = { id: pendingId, title: 'Untitled', content: '', ...meta };
+      setNotes(p => [...p, newNote]);
+      setActiveId(pendingId);
+      setGhost(null); setGhostThinking(false);
+      setSelMenu(null); setSelThinking(null); setSelRes(null);
+      setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
+    } else {
+      // Editing metadata of the current note
+      if (!skip) {
+        setNotes(p => p.map(n => n.id === activeId
+          ? { ...n, subject: subject.trim(), professor: professor.trim(), goal: goal.trim() }
+          : n
+        ));
+      }
+    }
+    setNoteSetupModal(null);
+  }
   const activeSugg = suggestions.filter(s => s.noteId === activeId && (!s.textRef || content.includes(s.textRef)));
   const applyingSugg = suggestions.find(s => s.applying);
 
@@ -1970,7 +2096,7 @@ export default function SunnyDNotes() {
       llmProvider, apiKey,
       `You help students contribute to class discussions. Given a question from a lecture and the student's notes, write a concise, grounded response the student could give.
 Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
-      `Question: "${qText}"\n\nStudent notes:\n${noteContext.slice(0, 1200)}`,
+      `Question: "${qText}"\n\nStudent notes:\n${noteContext.slice(0, 1200)}${noteMetaBlock(note)}`,
       400
     )
       .then(raw => {
@@ -2011,7 +2137,7 @@ Your answer MUST:
         `Question: "${q.text}"
 
 Student notes:
-${noteContext.slice(0, 2000)}
+${noteContext.slice(0, 2000)}${noteMetaBlock(note)}
 
 Recent lecture transcript:
 "${transcript.slice(-800)}"`,
@@ -2052,7 +2178,7 @@ If no clear questions exist, return {"questions":[]}`,
         `New transcript segment: "${newText}"
 
 Student's notes for context:
-${noteContext.slice(0, 1200)}`,
+${noteContext.slice(0, 1200)}${noteMetaBlock(note)}`,
         500
       );
     } catch { return; }
@@ -2156,7 +2282,7 @@ CRITICAL — only return suggestions when something GENUINELY important is missi
 CRITICAL — textRef: use an exact phrase from the notes ONLY when there is a genuinely related passage nearby. If the content is brand-new with no relevant anchor in the notes, set textRef to null — do NOT invent a random anchor.
 CRITICAL — apply: write in note style (concise, clear) not transcript style. 2-4 sentences max. You MAY use markdown (**bold**, *italic*, ## Heading 2, - bullet list, \`code\`) where it genuinely helps — never force it.
 Return [] if nothing important is missing.`,
-        `Lecture segment (new content since last scan):\n"${newTranscriptPart.slice(0, 1500)}"\n\nCurrent note content:\n${noteText.slice(0, 1200) || "(empty)"}`,
+        `Lecture segment (new content since last scan):\n"${newTranscriptPart.slice(0, 1500)}"\n\nCurrent note content:\n${noteText.slice(0, 1200) || "(empty)"}${noteMetaBlock(note)}`,
         800
       );
 
@@ -2412,7 +2538,7 @@ QUANTITY RULES (MUST follow exactly):
 1. "fact" category: include EVERY factual issue you find. Do not skip any. No cap.
 2. ${otherTone}
 ${focusNew}`,
-        `Active note:\n\n${text}${crossCtx}`, 1500);
+        `Active note:\n\n${text}${crossCtx}${noteMetaBlock(note)}`, 1500);
 
       const cleaned = raw.replace(/```json|```/g, "").trim();
       const match = cleaned.match(/\[[\s\S]*\]/);
@@ -2605,7 +2731,7 @@ Start your text with "\\n\\n> " to render as a callout-style blockquote, or with
 The text may use markdown (**bold**, *italic*, - bullet) where it helps clarity.
 Keep it concise (2–4 sentences). Match the note tone.`,
     };
-    const userMsg = `Note title: "${noteTitle}"
+    const userMsg = `Note title: "${noteTitle}"${noteMetaBlock(note)}
 
 Context before selection:
 "${ctxBefore}"
@@ -2939,13 +3065,14 @@ Return the rewritten passage only:`;
 
   useEffect(() => {
     const onKey = e => {
+      if (e.key === "Escape" && noteSetupModal) { confirmNoteSetup(true); return; }
       if (e.key === "Escape" && dockedCard) closeDocked();
       if (e.key === "Escape" && selRes) setSelRes(null);
       if (e.key === "Escape" && selMenu) setSelMenu(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dockedCard, selRes, selMenu]);
+  }, [dockedCard, selRes, selMenu, noteSetupModal]);
 
   /* ── Global ⌘K / Ctrl+K to toggle search palette ── */
   useEffect(() => {
@@ -3404,7 +3531,7 @@ Return the rewritten passage only:`;
                               llmProvider, apiKey,
                               `You help students contribute to class discussions. Given a question from a lecture and the student's notes, write a concise grounded response.
 Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
-                              `Question: "${qText}"\n\nStudent notes:\n${noteContext.slice(0, 1200)}`,
+                              `Question: "${qText}"\n\nStudent notes:\n${noteContext.slice(0, 1200)}${noteMetaBlock(note)}`,
                               400
                             );
                             const m = raw.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
@@ -3446,9 +3573,8 @@ Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
           <aside className="notes-sb">
             <div className="sb-top-row">
               <button className="new-btn" onClick={() => {
-                const id = Date.now();
-                setNotes(p => [...p, { id, title: "Untitled", content: "" }]);
-                setActiveId(id); setPop(null); setGhost(null); setSelRes(null); setSelMenu(null); setSelThinking(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
+                setPop(null);
+                openNewNoteSetup();
               }}>+ New Note</button>
               <button className="search-btn" title="Search notes (⌘K)" onClick={() => setSearchOpen(true)}>⌕</button>
             </div>
@@ -3495,6 +3621,23 @@ Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
                   <span>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</span>
                   {activeSugg.length > 0 && <span className="ann-badge">{activeSugg.length} suggestions</span>}
                 </div>
+                {/* Note metadata chips — shown when at least one field is set */}
+                {(note.subject || note.professor || note.goal) && (
+                  <div className="note-meta-chips">
+                    {note.subject   && <span className="note-meta-chip"><span className="note-meta-chip-icon">📚</span>{note.subject}</span>}
+                    {note.professor && <span className="note-meta-chip"><span className="note-meta-chip-icon">👤</span>{note.professor}</span>}
+                    {note.goal      && <span className="note-meta-chip"><span className="note-meta-chip-icon">🎯</span>{note.goal}</span>}
+                    <button className="note-meta-edit-btn" title="Edit note details" onClick={openEditNoteMeta}>✎ edit</button>
+                  </div>
+                )}
+                {/* Prompt to add metadata if none set yet */}
+                {!note.subject && !note.professor && !note.goal && (
+                  <div style={{ paddingBottom: 4 }}>
+                    <button className="note-meta-edit-btn" style={{ fontSize: 11.5, color: 'var(--ink3)', opacity: .7 }} onClick={openEditNoteMeta}>
+                      + add subject &amp; professor for smarter suggestions
+                    </button>
+                  </div>
+                )}
                 <div className="divider" />
                 <div className={`ta-wrap${dockedCard ? " docked-open" : ""}`}>
                   <NoteEditor
@@ -3673,6 +3816,69 @@ Return ONLY valid JSON: {"answer":"1-2 sentences"}`,
             </div>
           );
         })()}
+
+        {/* ── Note setup modal (new note or edit metadata) ── */}
+        {noteSetupModal && createPortal(
+          <div className="note-setup-overlay" onClick={() => confirmNoteSetup(true)}>
+            <div className="note-setup-modal" onClick={e => e.stopPropagation()}>
+              <div className="note-setup-hdr">
+                <div className="note-setup-hdr-top">
+                  <span className="note-setup-icon">📚</span>
+                  <span className="note-setup-title">
+                    {noteSetupModal.pendingId !== null ? "Set up your note" : "Edit note details"}
+                  </span>
+                </div>
+                <p className="note-setup-sub">
+                  {noteSetupModal.pendingId !== null
+                    ? "SunnyD will personalise suggestions, Q&A answers, and more — all fields are optional."
+                    : "Update your note details to keep SunnyD's suggestions accurate."}
+                </p>
+              </div>
+              <div className="note-setup-body">
+                <div className="note-setup-field">
+                  <label className="note-setup-label">Subject / Course</label>
+                  <input
+                    className="note-setup-input"
+                    placeholder="e.g. Biology 101, ECON 202…"
+                    value={noteSetupModal.subject}
+                    onChange={e => setNoteSetupModal(p => ({ ...p, subject: e.target.value }))}
+                    autoFocus
+                    onKeyDown={e => e.key === "Enter" && confirmNoteSetup()}
+                  />
+                </div>
+                <div className="note-setup-field">
+                  <label className="note-setup-label">Professor / Instructor</label>
+                  <input
+                    className="note-setup-input"
+                    placeholder="e.g. Professor Smith, Dr. Patel…"
+                    value={noteSetupModal.professor}
+                    onChange={e => setNoteSetupModal(p => ({ ...p, professor: e.target.value }))}
+                    onKeyDown={e => e.key === "Enter" && confirmNoteSetup()}
+                  />
+                </div>
+                <div className="note-setup-field">
+                  <label className="note-setup-label">Your goal for these notes</label>
+                  <input
+                    className="note-setup-input"
+                    placeholder="e.g. Midterm prep, final project, just following along…"
+                    value={noteSetupModal.goal}
+                    onChange={e => setNoteSetupModal(p => ({ ...p, goal: e.target.value }))}
+                    onKeyDown={e => e.key === "Enter" && confirmNoteSetup()}
+                  />
+                </div>
+              </div>
+              <div className="note-setup-footer">
+                <button className="note-setup-skip" onClick={() => confirmNoteSetup(true)}>
+                  Skip →
+                </button>
+                <button className="note-setup-go" onClick={() => confirmNoteSetup(false)}>
+                  {noteSetupModal.pendingId !== null ? "Let's go →" : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
 
         {/* Annotation popover — questions only (fact-checks are in right panel) */}
         {/* Floating docked card */}
