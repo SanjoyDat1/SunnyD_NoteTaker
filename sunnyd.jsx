@@ -3680,10 +3680,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
           {/* Notes sidebar */}
           <aside className="notes-sb">
             <div className="sb-top-row">
-              <button className="new-btn" onClick={() => {
-                setPop(null);
-                openNewNoteSetup();
-              }}>+ New Note</button>
+              <button className="new-btn" onClick={() => openNewNoteSetup()}>+ New Note</button>
               <button className="search-btn" title="Search notes (⌘K)" onClick={() => setSearchOpen(true)}>⌕</button>
             </div>
             {notes.map(n => (
