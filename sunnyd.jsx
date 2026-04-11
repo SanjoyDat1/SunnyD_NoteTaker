@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
 import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from "docx";
@@ -93,6 +93,881 @@ async function ai(provider, apiKey, system, user, max = 900) {
   }
 
   throw new Error("Unknown provider: " + provider);
+}
+
+/* ─── Study podcast (dialogue TTS, browser-only) ──────────────────────────── */
+
+const PODCAST_TTS_MODEL_PRIMARY = "gpt-4o-mini-tts";
+const PODCAST_TTS_MODEL_FALLBACK = "tts-1-hd";
+const PODCAST_TTS_MAX_INPUT = 4096;
+const PODCAST_CHUNK_SOFT = 3800;
+/** Kokoro tokenizer is tight — keep chunks small for on-device open-source TTS */
+const KOKORO_TEXT_CHUNK = 420;
+/** SunnyD Cast hosts: female (OpenAI) / male (OpenAI) */
+const SUNNYD_OPENAI_VOICE_FEMALE = "nova";
+const SUNNYD_OPENAI_VOICE_MALE = "onyx";
+/** Kokoro-82M (Apache-2.0): strong female/male American pair from model card */
+const SUNNYD_KOKORO_VOICE_FEMALE = "af_bella";
+const SUNNYD_KOKORO_VOICE_MALE = "am_michael";
+
+let sunnydKokoroTtsPromise = null;
+
+function getStoredOpenAIKey() {
+  try {
+    return (sessionStorage.getItem("sd_key_openai") || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function resolveOpenAIKeyForTTS(llmProvider, currentApiKey) {
+  const openaiStored = getStoredOpenAIKey();
+  if (openaiStored) return openaiStored;
+  if (llmProvider === "openai" && currentApiKey?.trim()) return currentApiKey.trim();
+  return "";
+}
+
+function splitTextForTTS(text, maxLen = PODCAST_CHUNK_SOFT) {
+  const t = (text || "").trim();
+  if (!t) return [];
+  if (t.length <= maxLen) return [t];
+  const parts = [];
+  let rest = t;
+  while (rest.length > 0) {
+    if (rest.length <= maxLen) {
+      parts.push(rest);
+      break;
+    }
+    let cut = rest.lastIndexOf(". ", maxLen);
+    if (cut < Math.floor(maxLen * 0.45)) cut = rest.lastIndexOf("! ", maxLen);
+    if (cut < Math.floor(maxLen * 0.45)) cut = rest.lastIndexOf("? ", maxLen);
+    if (cut < Math.floor(maxLen * 0.45)) cut = rest.lastIndexOf("\n", maxLen);
+    if (cut < Math.floor(maxLen * 0.45)) cut = rest.lastIndexOf(" ", maxLen);
+    if (cut < 80) cut = maxLen;
+    const chunk = rest.slice(0, cut + 1).trim();
+    parts.push(chunk);
+    rest = rest.slice(cut + 1).trim();
+  }
+  return parts.filter(Boolean);
+}
+
+async function openaiCreateSpeech(apiKey, input, voice, instructions, signal) {
+  const trimmed = (input || "").trim().slice(0, PODCAST_TTS_MAX_INPUT);
+  if (!trimmed) throw new Error("Empty TTS input");
+
+  const tryOnce = async (model, useInstructions) => {
+    const body = {
+      model,
+      input: trimmed,
+      voice,
+      response_format: "mp3",
+    };
+    if (useInstructions && instructions?.trim()) body.instructions = instructions.trim().slice(0, 450);
+    const r = await fetch("https://api.openai.com/v1/audio/speech", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`;
+      try {
+        const err = await r.json();
+        msg = err.error?.message || msg;
+      } catch {
+        try { msg = (await r.text()).slice(0, 180); } catch {}
+      }
+      throw new Error(msg);
+    }
+    return r.arrayBuffer();
+  };
+
+  try {
+    return await tryOnce(PODCAST_TTS_MODEL_PRIMARY, true);
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    const em = String(e?.message || "").toLowerCase();
+    if (em.includes("401") || em.includes("invalid_api_key") || em.includes("incorrect api key")) throw e;
+    return tryOnce(PODCAST_TTS_MODEL_FALLBACK, false);
+  }
+}
+
+function float32SamplesToAudioBuffer(ctx, float32, sampleRate) {
+  const b = ctx.createBuffer(1, float32.length, sampleRate);
+  b.getChannelData(0).set(float32);
+  return b;
+}
+
+/** Load Kokoro TTS once per session (open-source, runs in-browser via Transformers.js). */
+async function loadSunnydKokoroTTS({ signal, progress_callback } = {}) {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  if (!sunnydKokoroTtsPromise) {
+    sunnydKokoroTtsPromise = (async () => {
+      const { KokoroTTS } = await import("kokoro-js");
+      let device = "wasm";
+      try {
+        if (typeof navigator !== "undefined" && navigator.gpu) device = "webgpu";
+      } catch {
+        device = "wasm";
+      }
+      const dtype = device === "webgpu" ? "fp32" : "q8";
+      return KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
+        dtype,
+        device,
+        progress_callback: progress_callback || undefined,
+      });
+    })();
+  }
+  try {
+    const tts = await sunnydKokoroTtsPromise;
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    return tts;
+  } catch (e) {
+    sunnydKokoroTtsPromise = null;
+    throw e;
+  }
+}
+
+function mergeMonoAudioBuffers(ctx, buffers) {
+  if (!buffers.length) return null;
+  const sampleRate = buffers[0].sampleRate;
+  let total = 0;
+  for (const b of buffers) total += b.length;
+  const out = ctx.createBuffer(1, total, sampleRate);
+  const ch = out.getChannelData(0);
+  let offset = 0;
+  for (const b of buffers) {
+    if (b.numberOfChannels === 1) {
+      ch.set(b.getChannelData(0), offset);
+    } else {
+      const c0 = b.getChannelData(0);
+      const c1 = b.getChannelData(1);
+      for (let i = 0; i < b.length; i++) ch[offset + i] = (c0[i] + c1[i]) * 0.5;
+    }
+    offset += b.length;
+  }
+  return out;
+}
+
+function audioBufferToWavBlob(buffer) {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const samples = buffer.length;
+  const bytesPerSample = 2;
+  const blockAlign = numChannels * bytesPerSample;
+  const dataSize = samples * blockAlign;
+  const arr = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(arr);
+  const writeStr = (off, s) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+  let o = 44;
+  for (let i = 0; i < samples; i++) {
+    for (let c = 0; c < numChannels; c++) {
+      let s = Math.max(-1, Math.min(1, buffer.getChannelData(c)[i]));
+      view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      o += 2;
+    }
+  }
+  return new Blob([arr], { type: "audio/wav" });
+}
+
+/** Strip markdown / emphasis markers so TTS never reads asterisks or backticks aloud. */
+function sanitizePodcastSpokenText(s) {
+  if (!s || typeof s !== "string") return "";
+  let t = s;
+  t = t.replace(/\*\*([\s\S]*?)\*\*/g, "$1");
+  t = t.replace(/\*([^*\n]+)\*/g, "$1");
+  t = t.replace(/__([^_\n]+)__/g, "$1");
+  t = t.replace(/(^|\s)_([^_\n]+)_(\s|$)/g, "$1$2$3");
+  t = t.replace(/`([^`\n]+)`/g, "$1");
+  t = t.replace(/\*\*/g, "");
+  t = t.replace(/\*/g, "");
+  t = t.replace(/^#{1,6}\s+/gm, "");
+  t = t.replace(/\s+/g, " ").trim();
+  return t;
+}
+
+function parsePodcastScriptJson(raw) {
+  if (!raw) return null;
+  const cleaned = raw.replace(/```json\s*|```/gi, "").trim();
+  const m = cleaned.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    const d = JSON.parse(m[0]);
+    if (!Array.isArray(d.turns) || d.turns.length === 0) return null;
+    const turns = d.turns
+      .map((t, i) => {
+        const speaker = String(t.speaker || "").toLowerCase().replace(/\s+/g, "_");
+        const text = sanitizePodcastSpokenText((t.text || "").trim());
+        if (!text) return null;
+        const id = speaker === "host_b" || speaker === "b" || speaker === "2" ? "host_b" : "host_a";
+        const defaultName = id === "host_b" ? "Ray" : "Dee";
+        let displayName = sanitizePodcastSpokenText((t.displayName || t.name || defaultName).trim());
+        if (!displayName) displayName = defaultName;
+        return {
+          id,
+          displayName,
+          text,
+        };
+      })
+      .filter(Boolean);
+    if (!turns.length) return null;
+    return { title: sanitizePodcastSpokenText((d.title || "SunnyD Cast").trim()) || "SunnyD Cast", turns };
+  } catch {
+    return null;
+  }
+}
+
+/** Rough per-turn timing for merged WAV (word-based; good enough for “who’s talking”). */
+function podcastTurnTimelineSec(turns) {
+  const wps = 2.4;
+  let acc = 0;
+  return turns.map(turn => {
+    const words = turn.text.trim().split(/\s+/).filter(Boolean).length;
+    const dur = Math.max(0.35, words / wps);
+    const seg = { id: turn.id, start: acc, end: acc + dur };
+    acc += dur;
+    return seg;
+  });
+}
+
+function activePodcastSpeakerFromTimeline(timeline, currentTime) {
+  if (!timeline.length || currentTime < 0) return null;
+  let id = null;
+  for (const seg of timeline) {
+    if (currentTime >= seg.start) id = seg.id;
+  }
+  return id;
+}
+
+/** One segment per script turn, times in seconds matching merged WAV currentTime (from decoded chunk durations). */
+function podcastSegmentsFromBufferDurations(turns, chunkCounts, buffers) {
+  if (!turns.length || turns.length !== chunkCounts.length) return [];
+  const need = chunkCounts.reduce((a, b) => a + b, 0);
+  if (need !== buffers.length) return [];
+  let bi = 0;
+  let tAcc = 0;
+  const segments = [];
+  for (let ti = 0; ti < turns.length; ti++) {
+    let dur = 0;
+    for (let k = 0; k < chunkCounts[ti]; k++) {
+      const buf = buffers[bi++];
+      dur += buf?.duration || 0;
+    }
+    const start = tAcc;
+    tAcc += dur;
+    segments.push({ id: turns[ti].id, start, end: tAcc });
+  }
+  return segments;
+}
+
+/** Non-last turns use [start, end); at boundaries the next host wins. Last turn runs through real file duration. */
+function activePodcastSpeakerFromSegments(segments, currentTime, audioDuration, ended) {
+  if (!segments.length || currentTime < 0 || ended) return null;
+  const last = segments[segments.length - 1];
+  const durOk = Number.isFinite(audioDuration) && audioDuration > 0.05;
+  const fileEnd = durOk ? audioDuration : last.end;
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const isLast = i === segments.length - 1;
+    if (isLast) {
+      const end = Math.max(seg.end, fileEnd);
+      if (currentTime >= seg.start && currentTime <= end + 0.04) return seg.id;
+    } else if (currentTime >= seg.start && currentTime < seg.end) {
+      return seg.id;
+    }
+  }
+  return null;
+}
+
+/** Recent dialogue around the pause point for “ask about this moment”. */
+function buildPodcastQuestionSnippet(turns, segments, currentTime, audioDuration, browserMode, activeSpeakerId) {
+  if (!turns.length) return { excerpt: "(No episode script.)", focusTurnIndex: 0 };
+  let idx = 0;
+  if (browserMode || !segments.length || currentTime == null || !Number.isFinite(currentTime)) {
+    const hit = turns.findIndex(t => t.id === activeSpeakerId);
+    idx = hit >= 0 ? hit : 0;
+    const from = Math.max(0, idx - 1);
+    const to = Math.min(turns.length, idx + 4);
+    const slice = turns.slice(from, to);
+    return {
+      excerpt: slice.map(t => `${t.displayName}: ${t.text}`).join("\n\n"),
+      focusTurnIndex: idx,
+    };
+  }
+  const last = segments[segments.length - 1];
+  const durOk = Number.isFinite(audioDuration) && audioDuration > 0.05;
+  const t = Math.min(Math.max(0, currentTime), durOk ? audioDuration : last.end);
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const isLast = i === segments.length - 1;
+    const endBound = isLast ? Math.max(seg.end, audioDuration || seg.end) : seg.end;
+    if (t >= seg.start && t < endBound) {
+      idx = i;
+      break;
+    }
+    if (isLast) idx = i;
+  }
+  const from = Math.max(0, idx - 2);
+  const to = Math.min(turns.length, idx + 3);
+  const slice = turns.slice(from, to);
+  return {
+    excerpt: slice.map(t => `${t.displayName}: ${t.text}`).join("\n\n"),
+    focusTurnIndex: idx,
+  };
+}
+
+function clampPodcastAnswerLength(s, maxWords = 95) {
+  if (!s || typeof s !== "string") return "";
+  const t = s.trim();
+  const parts = t.split(/\s+/).filter(Boolean);
+  if (parts.length <= maxWords) return t;
+  return `${parts.slice(0, maxWords).join(" ")}…`;
+}
+
+const LS_CAST_MAX_MIN = "sd_cast_max_min";
+const LS_CAST_FLOAT = "sd_cast_float_pos";
+const PODCAST_FLOAT_W = 300;
+const PODCAST_FLOAT_H = 340;
+
+/** Keep mini player on-screen (invalid sessionStorage / small viewport). */
+function clampPodcastFloatPosition(x, y) {
+  const m = 12;
+  const iw = typeof window !== "undefined" ? window.innerWidth : 400;
+  const ih = typeof window !== "undefined" ? window.innerHeight : 700;
+  const vw = Math.max(280, iw);
+  const vh = Math.max(360, ih);
+  let xi = Number(x);
+  let yi = Number(y);
+  if (!Number.isFinite(xi) || !Number.isFinite(yi)) {
+    xi = vw - PODCAST_FLOAT_W - m;
+    yi = vh - PODCAST_FLOAT_H - m;
+  }
+  const maxX = Math.max(m, vw - PODCAST_FLOAT_W - m);
+  const maxY = Math.max(m, vh - PODCAST_FLOAT_H - m);
+  return {
+    x: Math.min(Math.max(m, xi), maxX),
+    y: Math.min(Math.max(m, yi), maxY),
+  };
+}
+
+function clampPodcastMinutes(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return 7;
+  return Math.min(10, Math.max(2, Math.round(x)));
+}
+
+function podcastLengthTargets(minutes) {
+  const m = clampPodcastMinutes(minutes);
+  const wpm = 135;
+  const targetWords = Math.round(m * wpm);
+  return {
+    targetEpisodeMinutesMax: m,
+    targetWordCountApprox: targetWords,
+    targetWordCountMin: Math.round(targetWords * 0.88),
+    targetWordCountMax: Math.round(targetWords * 1.12),
+  };
+}
+
+function podcastScriptMaxOut(minutes, llmProvider) {
+  const m = clampPodcastMinutes(minutes);
+  const scaled = Math.round(2200 + (m - 2) * 1150);
+  const cap = llmProvider === "openai" ? 12000 : llmProvider === "claude" ? 8000 : 8192;
+  return Math.min(cap, Math.max(2800, scaled));
+}
+
+const PODCAST_SCRIPT_SYSTEM = `You write the official in-app audio show SunnyD Cast — a smart study recap for students. Output ONLY valid JSON (no markdown code fences, no markdown inside strings).
+
+Schema:
+{"title":"short episode title","turns":[{"speaker":"host_a","displayName":"Dee","text":"..."},{"speaker":"host_b","displayName":"Ray","text":"..."},...]}
+
+SPOKEN TEXT RULES (critical):
+- title, every displayName, and every "text" value must be plain spoken English only.
+- Do NOT use asterisks, underscores, backticks, hashtags, or any markdown. Nothing that would be read aloud as punctuation emphasis (no star characters at all in output strings).
+
+Hosts (never swap roles):
+- host_a = Dee (she/her, woman). host_b = Ray (he/him, man). Alternate turns most of the time.
+
+CORE DYNAMIC (for you as writer only — NEVER say this out loud in dialogue):
+- Dee is quick, witty, silly analogies, big reactions, playful wrong guesses that invite correction. She learns out loud; she is not the factual anchor.
+- Ray is the one who actually explains from the notes: definitions, steps, fixes misconceptions. Light dry humor ok; he carries most factual teaching. Not a fake résumé—only teach what the sources support.
+- The listener should feel this dynamic from how they talk. Hosts must NEVER announce it: forbid lines like "I'm the funny one," "I'll be serious," "I'm here for the jokes," "I'll focus on the content," "you explain and I'll joke," or any meta description of their roles. Just be those people.
+
+How they educate together:
+- Dee tees up joke / fake-out / "wait really?" → Ray explains from sources → Dee reframes memorably; Ray corrects if she oversimplifies wrong.
+- Ray gets more dense explanation lines; Dee reacts and asks the listener's questions out loud.
+
+LOCKED PERSONALITIES (show, don't tell):
+- Dee: warm, curious, humor that helps memory.
+- Ray: patient, structured, grounded in the materials.
+
+COLD OPEN — first 4–6 turns only:
+1) In turn 1 or 2, name SunnyD and SunnyD Cast once in a natural welcome (not a sales pitch).
+2) Self-intro plus short fictional bio colored by the topic (from title, course meta, notes themes). Dee's can be more absurd; Ray's can sound like someone who geeks out on the subject—in-character only, no fake degrees.
+3) One line each on today's plan: Dee sounds excited or silly; Ray sounds plain and clear about what you'll relearn.
+
+Teaching:
+- Cover notes and lecture transcript. Thin transcript → note it briefly, lean on notes.
+- Do not invent facts; Ray's factual lines must track sources. Dee's jokes can use silly hypotheticals but must not assert false facts as true.
+- No stage directions, sound effects, or "music fades." Spoken words only.
+- Each "text": 1–4 sentences unless a tight list helps.
+
+Length: The user JSON includes targetEpisodeMinutesMax, targetWordCountMin, targetWordCountMax, and targetWordCountApprox. Count all words in every "text" field combined (ignore JSON keys). Stay within that word band so spoken time lands near the minute cap. Shorter → tighter cold open and fewer tangents; longer → more depth and examples. Cold open stays the first 4–6 turns; scale the teaching and recap to hit the cap. Depth over breadth within the band.`;
+
+async function generatePodcastScript(provider, apiKey, userPayload, maxOut = 10000, signal) {
+  const user = typeof userPayload === "string" ? userPayload : JSON.stringify(userPayload);
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  const raw = await ai(provider, apiKey, PODCAST_SCRIPT_SYSTEM, user, maxOut);
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  const parsed = parsePodcastScriptJson(raw);
+  if (!parsed) throw new Error("Could not parse podcast script — try again.");
+  return parsed;
+}
+
+function pickWebSpeechVoices() {
+  const voices = typeof speechSynthesis !== "undefined" ? speechSynthesis.getVoices() : [];
+  const en = voices.filter(v => /en(-|$)/i.test(v.lang || ""));
+  const pool = en.length ? en : voices;
+  const prefer = (nameRe) => pool.find(v => nameRe.test(v.name || ""));
+  const voiceFemale =
+    prefer(/samantha|victoria|karen|female|zoe|fiona|susan|kate|linda|moira|tessa/i) ||
+    pool.find(v => /female/i.test(v.name || "")) ||
+    pool[0];
+  const voiceMale =
+    prefer(/daniel|fred|tom|aaron|male|oliver|arthur|nicky|reed|alex|david|mark|rishi/i) ||
+    pool.find(v => v && v !== voiceFemale && /male/i.test(v.name || "")) ||
+    pool.find(v => v && v !== voiceFemale) ||
+    pool[1] ||
+    voiceFemale;
+  return { voiceFemale: voiceFemale || null, voiceMale: voiceMale && voiceMale !== voiceFemale ? voiceMale : pool[1] || voiceFemale || null };
+}
+
+function speakTurnsWebSpeech(turns, signal, onProgress, onActiveTurn) {
+  return new Promise((resolve, reject) => {
+    if (!turns.length) {
+      onActiveTurn?.(null);
+      resolve();
+      return;
+    }
+    const { voiceFemale, voiceMale } = pickWebSpeechVoices();
+    let i = 0;
+    const next = () => {
+      if (signal.aborted) {
+        speechSynthesis.cancel();
+        onActiveTurn?.(null);
+        reject(new DOMException("Aborted", "AbortError"));
+        return;
+      }
+      if (i >= turns.length) {
+        onActiveTurn?.(null);
+        resolve();
+        return;
+      }
+      const t = turns[i];
+      onActiveTurn?.(t);
+      onProgress?.(i + 1, turns.length);
+      const u = new SpeechSynthesisUtterance(t.text);
+      const v = t.id === "host_b" ? voiceMale : voiceFemale;
+      if (v) u.voice = v;
+      u.rate = 1.02;
+      u.pitch = t.id === "host_b" ? 0.97 : 1.01;
+      u.onend = () => {
+        i += 1;
+        next();
+      };
+      u.onerror = () => {
+        onActiveTurn?.(null);
+        reject(new Error("Browser speech failed"));
+      };
+      speechSynthesis.speak(u);
+    };
+    speechSynthesis.cancel();
+    next();
+  });
+}
+
+const PODCAST_WAVE_BARS = 32;
+
+/** Live spectrum bars from AnalyserNode when file audio plays; speech-like motion for Web Speech (no TTS tap in browsers). */
+function PodcastWavePanel({ label, variant, isActive, analyserRef, audioRef, useAnalyserPath, simulateActive, compact }) {
+  const canvasRef = useRef(null);
+  const isActiveRef = useRef(isActive);
+  const useAnalyserPathRef = useRef(useAnalyserPath);
+  const simulateActiveRef = useRef(simulateActive);
+  const compactRef = useRef(!!compact);
+  isActiveRef.current = isActive;
+  useAnalyserPathRef.current = useAnalyserPath;
+  simulateActiveRef.current = simulateActive;
+  compactRef.current = !!compact;
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+    const ctx2 = canvas.getContext("2d");
+    if (!ctx2) return undefined;
+    const w = canvas.width;
+    const h = canvas.height;
+    const nBars = compactRef.current ? 24 : PODCAST_WAVE_BARS;
+    let freqBuf = null;
+    let raf = 0;
+    let tSim = 0;
+    const smoothed = new Array(nBars).fill(0.1);
+    const raw = new Array(nBars);
+
+    const drawLoop = () => {
+      raf = requestAnimationFrame(drawLoop);
+      const active = isActiveRef.current;
+      const useA = useAnalyserPathRef.current;
+      const sim = simulateActiveRef.current;
+      const analyser = analyserRef?.current;
+      const el = audioRef?.current;
+      const filePlaying = el && !el.paused && !el.ended;
+
+      if (useA && active && filePlaying && analyser) {
+        if (!freqBuf || freqBuf.length !== analyser.frequencyBinCount) {
+          freqBuf = new Uint8Array(analyser.frequencyBinCount);
+        }
+        analyser.getByteFrequencyData(freqBuf);
+        const usable = Math.min(freqBuf.length, 112);
+        const step = Math.max(1, Math.floor(usable / nBars));
+        for (let i = 0; i < nBars; i++) {
+          let sum = 0;
+          for (let k = 0; k < step; k++) sum += freqBuf[i * step + k] || 0;
+          const v = sum / step / 255;
+          raw[i] = Math.max(0.05, Math.min(1, v * 2.15 + 0.03));
+        }
+      } else if (sim && active) {
+        tSim += 0.022;
+        for (let i = 0; i < nBars; i++) {
+          const ph = tSim * 5.5 + i * 0.33;
+          const env = 0.5 + 0.5 * Math.sin(tSim * 12 + i * 0.27);
+          const band = 0.5 + 0.5 * Math.sin(ph);
+          raw[i] = Math.max(0.12, Math.min(1, 0.2 + band * 0.58 * env));
+        }
+      } else {
+        const t = performance.now() / 1000;
+        for (let i = 0; i < nBars; i++) {
+          raw[i] = 0.07 + 0.06 * Math.sin(t * 1.2 + i * 0.26);
+        }
+      }
+
+      const snap = useA && active && filePlaying && analyser ? 0.62 : sim && active ? 0.45 : 0.28;
+      for (let i = 0; i < nBars; i++) {
+        smoothed[i] += (raw[i] - smoothed[i]) * snap;
+      }
+
+      ctx2.clearRect(0, 0, w, h);
+      const grad = ctx2.createLinearGradient(0, h, 0, 0);
+      if (variant === "dee") {
+        grad.addColorStop(0, "rgba(255,183,77,0.35)");
+        grad.addColorStop(0.45, "#ffb74d");
+        grad.addColorStop(1, "#f57c00");
+      } else {
+        grad.addColorStop(0, "rgba(149,117,205,0.35)");
+        grad.addColorStop(0.45, "#9575cd");
+        grad.addColorStop(1, "#5e35b1");
+      }
+      ctx2.fillStyle = grad;
+      const slot = w / nBars;
+      for (let i = 0; i < nBars; i++) {
+        const bw = slot * 0.62;
+        const x = i * slot + (slot - bw) / 2;
+        const barH = Math.max(2, smoothed[i] * h * 0.94);
+        const y = h - barH;
+        ctx2.beginPath();
+        const r = Math.min(bw / 2, 2.5);
+        if (typeof ctx2.roundRect === "function") {
+          ctx2.roundRect(x, y, bw, barH, r);
+        } else {
+          ctx2.rect(x, y, bw, barH);
+        }
+        ctx2.fill();
+      }
+    };
+
+    raf = requestAnimationFrame(drawLoop);
+    return () => cancelAnimationFrame(raf);
+  }, [variant, analyserRef, audioRef, compact]);
+
+  const vClass = variant === "ray" ? "podcast-wave-wrap--ray" : "podcast-wave-wrap--dee";
+  return (
+    <div
+      className={`podcast-wave-wrap ${vClass}${compact ? " podcast-wave-wrap--compact" : ""}${isActive ? " podcast-wave-wrap--active" : ""}`}
+      aria-label={isActive ? `${label} speaking` : label}
+    >
+      <canvas
+        ref={canvasRef}
+        width={compact ? 108 : 152}
+        height={compact ? 40 : 56}
+        className={`podcast-wave-canvas${compact ? " podcast-wave-canvas--compact" : ""}`}
+        aria-hidden
+      />
+      <span className="podcast-wave-name">{label}</span>
+    </div>
+  );
+}
+
+function PodcastQuestionPanel({
+  questionText,
+  setQuestionText,
+  answer,
+  busy,
+  onSubmit,
+  onCloseResume,
+  noApiKey,
+}) {
+  return (
+    <div className="podcast-q-panel">
+      <p className="podcast-q-hint">Playback is paused. Ask about the lines you just heard.</p>
+      {noApiKey && <p className="podcast-q-warn">Add your API key in settings to get an answer.</p>}
+      <textarea
+        className="podcast-q-input"
+        rows={3}
+        placeholder="e.g. Can you explain that last analogy in simpler terms?"
+        value={questionText}
+        onChange={e => setQuestionText(e.target.value)}
+        disabled={busy}
+      />
+      <div className="podcast-q-actions">
+        <button type="button" className="note-setup-go podcast-q-send" disabled={busy || !questionText.trim()} onClick={onSubmit}>
+          {busy ? "Thinking…" : "Get answer"}
+        </button>
+        <button type="button" className="note-setup-skip" disabled={busy} onClick={onCloseResume}>
+          Resume episode
+        </button>
+      </div>
+      {answer && (
+        <div className="podcast-q-answer">
+          <span className="podcast-q-answer-label">Answer</span>
+          <p className="podcast-q-answer-body">{answer}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PodcastFloatingDock({
+  position,
+  setPosition,
+  title,
+  wavePropsDee,
+  wavePropsRay,
+  audioRef,
+  hasFileAudio,
+  webSpeech,
+  onExpand,
+  onClose,
+  onQuestion,
+  questionOpen,
+  questionText,
+  setQuestionText,
+  questionAnswer,
+  questionBusy,
+  onQuestionSubmit,
+  onQuestionCloseResume,
+  noApiKey,
+}) {
+  const dragStartRef = useRef(null);
+  const posStartRef = useRef(null);
+  const lastPosRef = useRef(position);
+  const floatRootRef = useRef(null);
+  const [, setTick] = useState(0);
+
+  lastPosRef.current = position;
+
+  useEffect(() => {
+    if (!hasFileAudio || !audioRef?.current) return undefined;
+    const el = audioRef.current;
+    let raf = 0;
+    let alive = true;
+    const bump = () => setTick(t => (t + 1) % 1e6);
+    el.addEventListener("timeupdate", bump);
+    el.addEventListener("play", bump);
+    el.addEventListener("pause", bump);
+    el.addEventListener("seeked", bump);
+    const loop = () => {
+      if (!alive) return;
+      raf = requestAnimationFrame(loop);
+      if (!el.paused && !el.ended) bump();
+    };
+    raf = requestAnimationFrame(loop);
+    return () => {
+      alive = false;
+      cancelAnimationFrame(raf);
+      el.removeEventListener("timeupdate", bump);
+      el.removeEventListener("play", bump);
+      el.removeEventListener("pause", bump);
+      el.removeEventListener("seeked", bump);
+    };
+  }, [hasFileAudio, audioRef]);
+
+  const clampPos = useCallback((x, y, w, h) => {
+    const m = 10;
+    const vw = typeof window !== "undefined" ? window.innerWidth : 400;
+    const vh = typeof window !== "undefined" ? window.innerHeight : 700;
+    return {
+      x: Math.min(Math.max(m, x), vw - w - m),
+      y: Math.min(Math.max(m, y), vh - h - m),
+    };
+  }, []);
+
+  const onPointerDownDrag = e => {
+    if (e.button !== 0) return;
+    if (e.target.closest("button")) return;
+    e.preventDefault();
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    posStartRef.current = { ...lastPosRef.current };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  const onPointerMoveDrag = e => {
+    if (!dragStartRef.current || !posStartRef.current) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    const rect = floatRootRef.current?.getBoundingClientRect?.() || { width: 296, height: 260 };
+    const next = clampPos(posStartRef.current.x + dx, posStartRef.current.y + dy, rect.width, rect.height);
+    lastPosRef.current = next;
+    setPosition(next);
+  };
+
+  const onPointerUpDrag = e => {
+    dragStartRef.current = null;
+    posStartRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+    try {
+      sessionStorage.setItem(LS_CAST_FLOAT, JSON.stringify(lastPosRef.current));
+    } catch {}
+  };
+
+  const el = audioRef?.current;
+  const dur = el && Number.isFinite(el.duration) ? el.duration : 0;
+  const cur = el && Number.isFinite(el.currentTime) ? el.currentTime : 0;
+  const pct = dur > 0 ? Math.min(100, (cur / dur) * 100) : 0;
+
+  return (
+    <div ref={floatRootRef} className="podcast-float-root" style={{ transform: `translate(${position.x}px, ${position.y}px)` }}>
+      <div className="podcast-float-inner">
+        <div
+          className="podcast-float-drag"
+          onPointerDown={onPointerDownDrag}
+          onPointerMove={onPointerMoveDrag}
+          onPointerUp={onPointerUpDrag}
+          onPointerCancel={onPointerUpDrag}
+        >
+          <span className="podcast-float-grip" aria-hidden />
+          <span className="podcast-float-title">{title || "SunnyD Cast"}</span>
+          <div className="podcast-float-win-btns">
+            <button type="button" className="podcast-float-icon-btn" onClick={onExpand} aria-label="Expand player">
+              ⛶
+            </button>
+            <button type="button" className="podcast-float-icon-btn" onClick={onClose} aria-label="Close and stop">
+              ×
+            </button>
+          </div>
+        </div>
+
+        <div className="podcast-float-waves">
+          <PodcastWavePanel {...wavePropsDee} compact />
+          <PodcastWavePanel {...wavePropsRay} compact />
+        </div>
+
+        {webSpeech && (
+          <div className="podcast-float-transport podcast-float-transport--speech">
+            <button
+              type="button"
+              className="podcast-float-play"
+              disabled={webSpeech.speaking}
+              aria-label="Play through speaker"
+              onClick={webSpeech.onPlay}
+            >
+              {webSpeech.speaking ? "…" : "▶ Speaker"}
+            </button>
+            {webSpeech.speaking && (
+              <button type="button" className="podcast-float-stop" onClick={webSpeech.onStop}>
+                Stop
+              </button>
+            )}
+          </div>
+        )}
+
+        {hasFileAudio && (
+          <div className="podcast-float-transport">
+            <button
+              type="button"
+              className="podcast-float-play"
+              aria-label={el?.paused ? "Play" : "Pause"}
+              onClick={() => {
+                const a = audioRef?.current;
+                if (!a) return;
+                if (a.paused) a.play().catch(() => {});
+                else a.pause();
+              }}
+            >
+              {el?.paused ? "▶" : "❚❚"}
+            </button>
+            <div className="podcast-float-scrub">
+              <div className="podcast-float-scrub-fill" style={{ width: `${pct}%` }} />
+            </div>
+            <span className="podcast-float-time">
+              {dur > 0 ? `${Math.floor(cur / 60)}:${String(Math.floor(cur % 60)).padStart(2, "0")}` : "—"}
+            </span>
+          </div>
+        )}
+
+        {hasFileAudio && (
+          <input
+            type="range"
+            className="podcast-float-seek"
+            min={0}
+            max={dur > 0 ? dur : 1}
+            step={0.1}
+            value={dur > 0 ? cur : 0}
+            onChange={e => {
+              const a = audioRef?.current;
+              if (a && dur > 0) a.currentTime = Number(e.target.value);
+            }}
+            aria-label="Seek episode"
+          />
+        )}
+
+        <div className="podcast-float-actions">
+          <button type="button" className="podcast-float-q-btn" onClick={onQuestion} disabled={questionBusy}>
+            ? Ask about this moment
+          </button>
+        </div>
+
+        {questionOpen && (
+          <PodcastQuestionPanel
+            questionText={questionText}
+            setQuestionText={setQuestionText}
+            answer={questionAnswer}
+            busy={questionBusy}
+            onSubmit={onQuestionSubmit}
+            onCloseResume={onQuestionCloseResume}
+            noApiKey={noApiKey}
+          />
+        )}
+      </div>
+    </div>
+  );
 }
 
 /* ─── Semantic Search ────────────────────────────────────────────────────── */
@@ -648,6 +1523,15 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .export-wrap{position:relative;}
 .export-btn{padding:5px 11px;border-radius:6px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .15s;}
 .export-btn:hover{border-color:var(--rule2);background:var(--paper);color:var(--ink);}
+.hdr-podcast-btn{
+  display:flex;align-items:center;gap:5px;
+  padding:5px 11px;border-radius:6px;border:1px solid rgba(94,56,160,.38);
+  background:linear-gradient(135deg,rgba(107,62,184,.12),rgba(94,56,160,.06));
+  font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:#5E38A0;
+  cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.hdr-podcast-btn:hover:not(:disabled){border-color:rgba(94,56,160,.58);background:rgba(94,56,160,.16);color:#4A2D85;}
+.hdr-podcast-btn:disabled{opacity:.45;cursor:not-allowed;}
 .export-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:9999;width:220px;background:var(--page);border:1px solid var(--rule2);border-radius:10px;box-shadow:0 8px 28px rgba(50,35,15,.13),0 2px 8px rgba(50,35,15,.07);overflow:hidden;animation:cardRise .18s cubic-bezier(.22,1,.36,1);}
 .export-item{display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;background:none;border:none;cursor:pointer;text-align:left;transition:background .12s;}
 .export-item:hover{background:var(--paper);}
@@ -1123,6 +2007,129 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
   box-shadow:0 3px 10px rgba(165,95,0,.28);letter-spacing:.01em;
 }
 .note-setup-go:hover{opacity:.9;transform:translateY(-1px);}
+
+/* ── Study podcast modal ── */
+.podcast-modal{width:min(480px,calc(100vw - 28px));}
+.podcast-disclosure{
+  font-size:11px;line-height:1.45;color:var(--ink3);padding:10px 12px;
+  background:rgba(94,56,160,.06);border:1px solid rgba(94,56,160,.12);border-radius:8px;margin-bottom:12px;
+}
+.podcast-progress{font-size:12px;color:var(--ink2);margin-bottom:10px;font-weight:500;}
+.podcast-progress-bar{height:5px;background:var(--rule);border-radius:3px;overflow:hidden;margin-top:6px;}
+.podcast-progress-fill{height:100%;background:linear-gradient(90deg,#6B3EB8,#5E38A0);border-radius:3px;transition:width .25s ease;}
+.podcast-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px;}
+.podcast-audio{width:100%;margin-top:12px;border-radius:8px;}
+.podcast-speakers{
+  display:flex;justify-content:center;align-items:flex-end;gap:20px;margin:14px 0 10px;
+}
+.podcast-wave-wrap{
+  display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px 12px 8px;
+  border-radius:12px;background:rgba(0,0,0,.03);border:1px solid var(--rule);
+  transition:box-shadow .2s,border-color .2s,background .2s;
+  min-width:156px;
+}
+.podcast-wave-wrap--dee.podcast-wave-wrap--active{
+  background:rgba(197,120,0,.06);border-color:rgba(197,120,0,.22);
+  box-shadow:0 4px 16px rgba(165,95,0,.12);
+}
+.podcast-wave-wrap--ray.podcast-wave-wrap--active{
+  background:rgba(94,56,160,.07);border-color:rgba(94,56,160,.2);
+  box-shadow:0 4px 16px rgba(94,56,160,.14);
+}
+.podcast-wave-canvas{display:block;width:152px;height:56px;border-radius:8px;}
+.podcast-wave-name{font-size:11px;font-weight:600;color:var(--ink2);}
+.podcast-err{font-size:12.5px;color:#B83232;line-height:1.45;margin-top:8px;}
+.podcast-length-row{display:flex;align-items:center;gap:10px;margin-top:8px;margin-bottom:2px;}
+.podcast-length-label{font-size:12.5px;color:var(--ink2);font-weight:600;flex-shrink:0;}
+.podcast-length-slider{flex:1;min-width:0;accent-color:#A85F00;cursor:pointer;height:6px;}
+.podcast-length-slider:disabled{opacity:.45;cursor:not-allowed;}
+.podcast-length-val{font-size:12px;font-weight:600;color:var(--ink2);min-width:46px;white-space:nowrap;}
+.podcast-length-hint{font-size:10.5px;color:var(--ink3);margin:6px 0 0;line-height:1.4;}
+.podcast-overlay--ghost{background:transparent !important;backdrop-filter:none !important;pointer-events:none !important;animation:none;}
+.podcast-float-root{
+  position:fixed;left:0;top:0;z-index:120000;will-change:transform;
+  pointer-events:none;
+}
+.podcast-float-inner{
+  pointer-events:auto;touch-action:manipulation;
+  width:min(296px,calc(100vw - 24px));
+  background:var(--page);
+  border:1px solid var(--rule2);
+  border-radius:16px;
+  box-shadow:0 16px 48px rgba(50,35,15,.25),0 6px 20px rgba(50,35,15,.12);
+  padding:10px 12px 12px;
+}
+.podcast-float-drag{
+  display:flex;align-items:center;gap:8px;cursor:grab;padding:4px 2px 8px;margin:-2px 0 4px;
+  touch-action:none;user-select:none;border-bottom:1px solid var(--rule);
+}
+.podcast-float-drag:active{cursor:grabbing;}
+.podcast-float-grip{
+  width:18px;height:14px;border-radius:3px;
+  background:repeating-linear-gradient(180deg,var(--ink3) 0 2px,transparent 2px 4px) center/10px 10px no-repeat;
+  opacity:.5;flex-shrink:0;
+}
+.podcast-float-title{flex:1;font-size:13px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.podcast-float-win-btns{display:flex;gap:4px;flex-shrink:0;}
+.podcast-float-icon-btn{
+  background:var(--paper);border:1px solid var(--rule);border-radius:8px;width:32px;height:32px;
+  cursor:pointer;font-size:15px;line-height:1;color:var(--ink2);transition:background .15s,color .15s;
+}
+.podcast-float-icon-btn:hover{background:var(--rule);color:var(--ink);}
+.podcast-float-waves{display:flex;justify-content:center;gap:8px;margin:6px 0 8px;}
+.podcast-wave-wrap--compact{min-width:0;padding:6px 8px 6px;gap:4px;}
+.podcast-wave-canvas--compact{width:108px !important;height:40px !important;}
+.podcast-float-transport{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.podcast-float-transport--speech{justify-content:center;flex-wrap:wrap;gap:8px;}
+.podcast-float-play{
+  min-width:44px;height:36px;border-radius:10px;border:none;cursor:pointer;
+  background:linear-gradient(135deg,#C57800,#A85F00);color:#fff;font-size:15px;font-weight:700;
+  box-shadow:0 2px 10px rgba(165,95,0,.25);
+}
+.podcast-float-play:disabled{opacity:.55;cursor:default;}
+.podcast-float-stop{font-size:12.5px;padding:8px 12px;border-radius:8px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;font-family:'DM Sans',sans-serif;}
+.podcast-float-scrub{flex:1;height:5px;background:var(--rule);border-radius:4px;overflow:hidden;min-width:0;}
+.podcast-float-scrub-fill{height:100%;background:linear-gradient(90deg,#C57800,#A85F00);border-radius:4px;}
+.podcast-float-time{font-size:11px;font-weight:600;color:var(--ink3);width:38px;text-align:right;flex-shrink:0;}
+.podcast-float-seek{width:100%;margin:0 0 8px;height:6px;accent-color:#A85F00;cursor:pointer;}
+.podcast-float-actions{margin-top:4px;}
+.podcast-float-q-btn{
+  width:100%;padding:9px 10px;border-radius:10px;border:1px solid rgba(94,56,160,.35);
+  background:rgba(94,56,160,.08);color:#5E38A0;font-size:12.5px;font-weight:600;cursor:pointer;
+  font-family:'DM Sans',sans-serif;transition:background .15s,border-color .15s;
+}
+.podcast-float-q-btn:hover:not(:disabled){background:rgba(94,56,160,.12);}
+.podcast-float-q-btn:disabled{opacity:.5;cursor:default;}
+.podcast-q-panel{margin-top:10px;padding-top:10px;border-top:1px solid var(--rule);animation:podcastQIn .22s ease;}
+@keyframes podcastQIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+.podcast-q-hint{font-size:11.5px;color:var(--ink3);line-height:1.45;margin:0 0 8px;}
+.podcast-q-warn{font-size:11.5px;color:#B83232;margin:0 0 8px;}
+.podcast-q-input{
+  width:100%;resize:vertical;min-height:64px;padding:10px 12px;border-radius:10px;border:1.5px solid var(--rule2);
+  font-family:'DM Sans',sans-serif;font-size:13px;color:var(--ink);background:var(--paper);margin-bottom:8px;
+  box-sizing:border-box;
+}
+.podcast-q-input:focus{outline:none;border-color:rgba(197,120,0,.5);box-shadow:0 0 0 3px rgba(197,120,0,.1);}
+.podcast-q-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;}
+.podcast-q-send{padding:8px 16px !important;font-size:12.5px !important;}
+.podcast-q-answer{background:rgba(94,56,160,.06);border-radius:10px;padding:10px 12px;margin-top:6px;}
+.podcast-q-answer-label{display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#5E38A0;margin-bottom:6px;}
+.podcast-q-answer-body{font-size:12.5px;color:var(--ink2);line-height:1.5;margin:0;white-space:pre-wrap;}
+.podcast-minimize-top-btn{
+  margin-left:6px;padding:4px 8px;border-radius:8px;border:1px solid rgba(197,120,0,.35);
+  background:rgba(197,120,0,.08);color:#A85F00;font-size:14px;line-height:1;cursor:pointer;font-weight:600;
+}
+.podcast-minimize-top-btn:hover{background:rgba(197,120,0,.14);}
+.podcast-q-open-btn{margin-right:4px;}
+.sunnyd-cast-hdr{
+  background:linear-gradient(135deg,#FFF9F0 0%,#FDF8F2 48%,#F5EBDC 100%) !important;
+  border-bottom:1px solid rgba(197,120,0,.28) !important;
+}
+.sunnyd-cast-badge{
+  display:inline-block;
+  font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:#A85F00;
+  margin-bottom:6px;
+}
 
 /* ── Note metadata bar (below title) ── */
 .note-meta-chips{
@@ -1869,6 +2876,147 @@ export default function SunnyDNotes() {
   const [exportOpen, setExportOpen] = useState(false);
   const [savingToDisk, setSavingToDisk] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [podcastOpen, setPodcastOpen] = useState(false);
+  const [podcastPhase, setPodcastPhase] = useState("idle");
+  const [podcastMsg, setPodcastMsg] = useState("");
+  const [podcastErr, setPodcastErr] = useState("");
+  const [podcastTtsProg, setPodcastTtsProg] = useState({ cur: 0, total: 0 });
+  const [podcastAudioUrl, setPodcastAudioUrl] = useState(null);
+  const [podcastTitle, setPodcastTitle] = useState("");
+  const [podcastBrowserMode, setPodcastBrowserMode] = useState(false);
+  const [podcastTurns, setPodcastTurns] = useState([]);
+  const [podcastSpeaking, setPodcastSpeaking] = useState(false);
+  const [podcastVoiceKind, setPodcastVoiceKind] = useState(null);
+  const [podcastMaxMinutes, setPodcastMaxMinutes] = useState(() => {
+    try {
+      const s = sessionStorage.getItem(LS_CAST_MAX_MIN);
+      if (s == null) return 7;
+      return clampPodcastMinutes(Number(s));
+    } catch {
+      return 7;
+    }
+  });
+  const [podcastActiveSpeaker, setPodcastActiveSpeaker] = useState(null);
+  const [podcastAudioSegments, setPodcastAudioSegments] = useState([]);
+  const [podcastMinimized, setPodcastMinimized] = useState(false);
+  const [podcastFloatPos, setPodcastFloatPos] = useState({ x: 16, y: 16 });
+  const [podcastQuestionOpen, setPodcastQuestionOpen] = useState(false);
+  const [podcastQuestionText, setPodcastQuestionText] = useState("");
+  const [podcastQuestionAnswer, setPodcastQuestionAnswer] = useState("");
+  const [podcastQuestionBusy, setPodcastQuestionBusy] = useState(false);
+  const podcastAbortRef = useRef(null);
+  const podcastAudioRef = useRef(null);
+  const podcastAnalyserRef = useRef(null);
+  const lastPodcastSpeakerRef = useRef(null);
+
+  const podcastTimeAnchors = useMemo(() => podcastTurnTimelineSec(podcastTurns), [podcastTurns]);
+
+  const syncPodcastSpeakerFromAudio = useCallback(() => {
+    const el = podcastAudioRef.current;
+    if (!el || podcastBrowserMode) return;
+    if (el.ended) {
+      lastPodcastSpeakerRef.current = null;
+      setPodcastActiveSpeaker(null);
+      return;
+    }
+    let next = null;
+    const realSeg = podcastAudioSegments.length > 0;
+    if (realSeg) {
+      next = activePodcastSpeakerFromSegments(
+        podcastAudioSegments,
+        el.currentTime,
+        el.duration,
+        false
+      );
+    } else {
+      const d = el.duration;
+      let t = el.currentTime;
+      const lastEnd = podcastTimeAnchors.length ? podcastTimeAnchors[podcastTimeAnchors.length - 1].end : 0;
+      if (Number.isFinite(d) && d > 0.1 && lastEnd > 0) {
+        t = (el.currentTime / d) * lastEnd;
+      }
+      next = activePodcastSpeakerFromTimeline(podcastTimeAnchors, t);
+    }
+    if (lastPodcastSpeakerRef.current !== next) {
+      lastPodcastSpeakerRef.current = next;
+      setPodcastActiveSpeaker(next);
+    }
+  }, [podcastTimeAnchors, podcastAudioSegments, podcastBrowserMode]);
+
+  useEffect(() => {
+    const el = podcastAudioRef.current;
+    if (!el || podcastBrowserMode) return undefined;
+    let raf = 0;
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      syncPodcastSpeakerFromAudio();
+    };
+    const start = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(loop);
+    };
+    const stop = () => {
+      cancelAnimationFrame(raf);
+      raf = 0;
+      syncPodcastSpeakerFromAudio();
+    };
+    el.addEventListener("play", start);
+    el.addEventListener("pause", stop);
+    el.addEventListener("ended", stop);
+    el.addEventListener("seeked", syncPodcastSpeakerFromAudio);
+    if (!el.paused && !el.ended) start();
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener("play", start);
+      el.removeEventListener("pause", stop);
+      el.removeEventListener("ended", stop);
+      el.removeEventListener("seeked", syncPodcastSpeakerFromAudio);
+    };
+  }, [podcastAudioUrl, podcastBrowserMode, syncPodcastSpeakerFromAudio]);
+
+  useEffect(() => {
+    if (!podcastAudioRef.current || podcastBrowserMode) return;
+    syncPodcastSpeakerFromAudio();
+  }, [podcastAudioSegments, podcastBrowserMode, syncPodcastSpeakerFromAudio]);
+
+  useEffect(() => {
+    if (!podcastOpen || !podcastAudioUrl || podcastBrowserMode) {
+      podcastAnalyserRef.current = null;
+      return undefined;
+    }
+    const el = podcastAudioRef.current;
+    if (!el) return undefined;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    let ctx;
+    let src;
+    let analyser;
+    try {
+      ctx = new AC();
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.82;
+      src = ctx.createMediaElementSource(el);
+      src.connect(analyser);
+      analyser.connect(ctx.destination);
+      podcastAnalyserRef.current = analyser;
+      const resume = () => {
+        ctx.resume().catch(() => {});
+      };
+      el.addEventListener("play", resume);
+      return () => {
+        el.removeEventListener("play", resume);
+        podcastAnalyserRef.current = null;
+        try {
+          src.disconnect();
+          analyser.disconnect();
+        } catch {}
+        ctx.close().catch(() => {});
+      };
+    } catch {
+      podcastAnalyserRef.current = null;
+      return undefined;
+    }
+  }, [podcastOpen, podcastAudioUrl, podcastBrowserMode]);
 
   const { transcript, interimTranscript, finalTranscript, listening, resetTranscript, browserSupportsSpeechRecognition } = useSpeechRecognition({ clearTranscriptOnListen: false });
 
@@ -1942,6 +3090,293 @@ export default function SunnyDNotes() {
   const setContent = v => { editorRef.current?.setEditorContent(v); };
   const setTitle   = v => setNotes(p => p.map(n => n.id === activeId ? { ...n, title:   v } : n));
 
+  const closePodcastModal = useCallback(() => {
+    try { podcastAbortRef.current?.abort(); } catch {}
+    podcastAbortRef.current = null;
+    try { speechSynthesis.cancel(); } catch {}
+    setPodcastSpeaking(false);
+    setPodcastAudioUrl(prev => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    if (podcastAudioRef.current) {
+      try {
+        podcastAudioRef.current.pause();
+        podcastAudioRef.current.removeAttribute("src");
+        podcastAudioRef.current.load();
+      } catch {}
+    }
+    setPodcastOpen(false);
+    setPodcastPhase("idle");
+    setPodcastErr("");
+    setPodcastMsg("");
+    setPodcastTtsProg({ cur: 0, total: 0 });
+    setPodcastTitle("");
+    setPodcastBrowserMode(false);
+    setPodcastTurns([]);
+    setPodcastVoiceKind(null);
+    setPodcastAudioSegments([]);
+    lastPodcastSpeakerRef.current = null;
+    setPodcastActiveSpeaker(null);
+    setPodcastMinimized(false);
+    setPodcastQuestionOpen(false);
+    setPodcastQuestionText("");
+    setPodcastQuestionAnswer("");
+    setPodcastQuestionBusy(false);
+  }, []);
+
+  const dockPodcastMinimized = useCallback(() => {
+    try {
+      const raw = sessionStorage.getItem(LS_CAST_FLOAT);
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (typeof p.x === "number" && typeof p.y === "number" && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+          setPodcastFloatPos(clampPodcastFloatPosition(p.x, p.y));
+          setPodcastMinimized(true);
+          return;
+        }
+      }
+    } catch {}
+    setPodcastFloatPos(
+      clampPodcastFloatPosition(window.innerWidth - PODCAST_FLOAT_W - 14, window.innerHeight - PODCAST_FLOAT_H - 18)
+    );
+    setPodcastMinimized(true);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!podcastMinimized) return;
+    setPodcastFloatPos(p => clampPodcastFloatPosition(p.x, p.y));
+  }, [podcastMinimized]);
+
+  const expandPodcastFromDock = useCallback(() => {
+    setPodcastMinimized(false);
+  }, []);
+
+  const runStudyPodcast = useCallback(async () => {
+    try { speechSynthesis.cancel(); } catch {}
+    setPodcastSpeaking(false);
+    setPodcastMinimized(false);
+    setPodcastQuestionOpen(false);
+    setPodcastQuestionText("");
+    setPodcastQuestionAnswer("");
+    setPodcastQuestionBusy(false);
+    setPodcastAudioSegments([]);
+    lastPodcastSpeakerRef.current = null;
+    setPodcastActiveSpeaker(null);
+    const ac = new AbortController();
+    podcastAbortRef.current = ac;
+    setPodcastErr("");
+    setPodcastAudioUrl(prev => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setPodcastBrowserMode(false);
+    setPodcastVoiceKind(null);
+    setPodcastPhase("script");
+    setPodcastMsg("Writing your episode…");
+    setPodcastTtsProg({ cur: 0, total: 0 });
+
+    const notePlain = content.trim();
+    const lec = (finalTranscript || transcript || "").trim();
+    if (notePlain.length < 40 && lec.length < 80) {
+      setPodcastPhase("error");
+      setPodcastErr("Add more notes or a short lecture transcript, then try again.");
+      return;
+    }
+
+    const scriptMax = podcastScriptMaxOut(podcastMaxMinutes, llmProvider);
+
+    const payload = {
+      ...podcastLengthTargets(podcastMaxMinutes),
+      noteTitle: note?.title || "Untitled",
+      noteMeta: (noteMetaBlock(note) || "").trim(),
+      studentNotes: notePlain.slice(0, 14000),
+      lectureTranscript: lec.length ? lec.slice(0, 12000) : "(No lecture transcript captured — rely on the notes and say so briefly in the dialogue if relevant.)",
+      openingBrief:
+        "Show don't tell: Dee witty, Ray teaches from notes—never have them say they're the funny or serious one. No markdown or asterisks in any string.",
+    };
+
+    let script;
+    try {
+      script = await generatePodcastScript(llmProvider, apiKey, payload, scriptMax, ac.signal);
+    } catch (e) {
+      if (e?.name === "AbortError") return;
+      setPodcastPhase("error");
+      setPodcastErr(e?.message || "Couldn’t write the episode. Try again.");
+      return;
+    }
+
+    setPodcastTitle(script.title);
+    setPodcastTurns(script.turns);
+
+    const oaiKey = resolveOpenAIKeyForTTS(llmProvider, apiKey);
+    const instrDee =
+      "You are Dee, female co-host of SunnyD Cast: funny, warm, playful—comedic timing but still clear. Sound like a podcast host who makes people laugh while they learn.";
+    const instrRay =
+      "You are Ray, male co-host of SunnyD Cast: knowledgeable, calm, clear teacher energy—confident explanations, friendly not stiff. Light dry humor only as reaction lines.";
+
+    const openaiJobs = [];
+    const kokoroJobs = [];
+    for (const t of script.turns) {
+      const isRay = t.id === "host_b";
+      const oaiVoice = isRay ? SUNNYD_OPENAI_VOICE_MALE : SUNNYD_OPENAI_VOICE_FEMALE;
+      const kokoroVoice = isRay ? SUNNYD_KOKORO_VOICE_MALE : SUNNYD_KOKORO_VOICE_FEMALE;
+      const instructions = isRay ? instrRay : instrDee;
+      for (const part of splitTextForTTS(t.text)) {
+        openaiJobs.push({ text: part, voice: oaiVoice, instructions });
+      }
+      for (const part of splitTextForTTS(t.text, KOKORO_TEXT_CHUNK)) {
+        kokoroJobs.push({ text: part, kokoroVoice });
+      }
+    }
+    if (!openaiJobs.length || !kokoroJobs.length) {
+      setPodcastPhase("error");
+      setPodcastErr("Empty episode. Tap New episode and try again.");
+      return;
+    }
+
+    setPodcastPhase("tts");
+
+    const ACtx = window.AudioContext || window.webkitAudioContext;
+    let decodeCtx = null;
+    const buffers = [];
+
+    const runOpenAIChunks = async () => {
+      for (let i = 0; i < openaiJobs.length; i++) {
+        if (ac.signal.aborted) throw new DOMException("Aborted", "AbortError");
+        setPodcastTtsProg({ cur: i + 1, total: openaiJobs.length });
+        setPodcastMsg(`Making audio… ${i + 1} / ${openaiJobs.length}`);
+        const mp3 = await openaiCreateSpeech(oaiKey, openaiJobs[i].text, openaiJobs[i].voice, openaiJobs[i].instructions, ac.signal);
+        const audioBuf = await decodeCtx.decodeAudioData(mp3.slice(0));
+        buffers.push(audioBuf);
+      }
+    };
+
+    const runKokoroChunks = async () => {
+      buffers.length = 0;
+      setPodcastTtsProg({ cur: 0, total: kokoroJobs.length });
+      setPodcastMsg("Loading voices… first run can take a minute.");
+      const tts = await loadSunnydKokoroTTS({
+        signal: ac.signal,
+        progress_callback: info => {
+          const p = info?.progress;
+          if (typeof p === "number" && !Number.isNaN(p)) {
+            setPodcastMsg(`Loading… ${Math.min(100, Math.round(p * 100))}%`);
+          }
+        },
+      });
+      for (let i = 0; i < kokoroJobs.length; i++) {
+        if (ac.signal.aborted) throw new DOMException("Aborted", "AbortError");
+        setPodcastTtsProg({ cur: i + 1, total: kokoroJobs.length });
+        setPodcastMsg(`Making audio on this device… ${i + 1} / ${kokoroJobs.length}`);
+        const raw = await tts.generate(kokoroJobs[i].text, { voice: kokoroJobs[i].kokoroVoice, speed: 1 });
+        buffers.push(float32SamplesToAudioBuffer(decodeCtx, raw.audio, raw.sampling_rate));
+      }
+    };
+
+    let voiceEngine = "kokoro";
+    try {
+      decodeCtx = new ACtx();
+      if (oaiKey) {
+        try {
+          await runOpenAIChunks();
+          voiceEngine = "openai";
+        } catch (e1) {
+          if (e1?.name === "AbortError") throw e1;
+          setPodcastErr("");
+          await runKokoroChunks();
+          voiceEngine = "kokoro";
+        }
+      } else {
+        await runKokoroChunks();
+        voiceEngine = "kokoro";
+      }
+
+      const merged = mergeMonoAudioBuffers(decodeCtx, buffers);
+      if (!merged) throw new Error("Could not merge audio.");
+      const chunkCounts =
+        voiceEngine === "openai"
+          ? script.turns.map(t => splitTextForTTS(t.text).length)
+          : script.turns.map(t => splitTextForTTS(t.text, KOKORO_TEXT_CHUNK).length);
+      const segments = podcastSegmentsFromBufferDurations(script.turns, chunkCounts, buffers);
+      setPodcastAudioSegments(segments);
+      const wavBlob = audioBufferToWavBlob(merged);
+      const url = URL.createObjectURL(wavBlob);
+      setPodcastAudioUrl(url);
+      setPodcastPhase("ready");
+      setPodcastBrowserMode(false);
+      setPodcastErr("");
+      setPodcastVoiceKind(voiceEngine);
+      setPodcastMsg(
+        voiceEngine === "openai"
+          ? "Ready. Play to relearn, or download a copy."
+          : "Ready. Made on this device—play to relearn, or download."
+      );
+    } catch (e) {
+      if (e?.name === "AbortError") return;
+      setPodcastAudioSegments([]);
+      setPodcastBrowserMode(true);
+      setPodcastPhase("ready");
+      setPodcastVoiceKind("system");
+      setPodcastErr("");
+      setPodcastMsg(
+        "Audio didn’t build. The script is still here—use Play (speaker) below, or New episode to retry."
+      );
+    } finally {
+      try { await decodeCtx?.close(); } catch {}
+    }
+  }, [llmProvider, apiKey, content, finalTranscript, transcript, note, podcastMaxMinutes]);
+
+  const resetPodcastSession = useCallback(() => {
+    try { podcastAbortRef.current?.abort(); } catch {}
+    podcastAbortRef.current = null;
+    try { speechSynthesis.cancel(); } catch {}
+    setPodcastSpeaking(false);
+    setPodcastAudioUrl(prev => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    if (podcastAudioRef.current) {
+      try {
+        podcastAudioRef.current.pause();
+        podcastAudioRef.current.removeAttribute("src");
+        podcastAudioRef.current.load();
+      } catch {}
+    }
+    setPodcastPhase("idle");
+    setPodcastErr("");
+    setPodcastMsg("");
+    setPodcastTtsProg({ cur: 0, total: 0 });
+    setPodcastTitle("");
+    setPodcastBrowserMode(false);
+    setPodcastTurns([]);
+    setPodcastVoiceKind(null);
+    setPodcastAudioSegments([]);
+    lastPodcastSpeakerRef.current = null;
+    setPodcastActiveSpeaker(null);
+    setPodcastMinimized(false);
+    setPodcastQuestionOpen(false);
+    setPodcastQuestionText("");
+    setPodcastQuestionAnswer("");
+    setPodcastQuestionBusy(false);
+  }, []);
+
+  useEffect(() => {
+    if (!podcastOpen || typeof speechSynthesis === "undefined") return;
+    const warm = () => {
+      try { speechSynthesis.getVoices(); } catch {}
+    };
+    warm();
+    speechSynthesis.addEventListener?.("voiceschanged", warm);
+    return () => speechSynthesis.removeEventListener?.("voiceschanged", warm);
+  }, [podcastOpen]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(LS_CAST_MAX_MIN, String(clampPodcastMinutes(podcastMaxMinutes)));
+    } catch {}
+  }, [podcastMaxMinutes]);
+
   /* ── Note metadata helpers ── */
   // Returns a context block injected into AI prompts when metadata is set
   function noteMetaBlock(n) {
@@ -1951,6 +3386,145 @@ export default function SunnyDNotes() {
     if (n?.goal)      parts.push(`Student's goal: ${n.goal}`);
     return parts.length ? `\n\n${parts.join('\n')}` : '';
   }
+
+  const handlePodcastBackdropClick = useCallback(
+    e => {
+      if (e.target !== e.currentTarget) return;
+      if (podcastPhase === "ready") dockPodcastMinimized();
+      else closePodcastModal();
+    },
+    [podcastPhase, dockPodcastMinimized, closePodcastModal]
+  );
+
+  const openPodcastQuestion = useCallback(() => {
+    try {
+      podcastAudioRef.current?.pause();
+    } catch {}
+    try {
+      podcastAbortRef.current?.abort();
+      speechSynthesis.cancel();
+    } catch {}
+    setPodcastSpeaking(false);
+    lastPodcastSpeakerRef.current = null;
+    setPodcastActiveSpeaker(null);
+    setPodcastQuestionOpen(true);
+    setPodcastQuestionText("");
+    setPodcastQuestionAnswer("");
+  }, []);
+
+  const closePodcastQuestionResume = useCallback(() => {
+    setPodcastQuestionOpen(false);
+    setPodcastQuestionText("");
+    setPodcastQuestionAnswer("");
+    setPodcastQuestionBusy(false);
+  }, []);
+
+  const playPodcastWebSpeech = useCallback(() => {
+    const ac = new AbortController();
+    podcastAbortRef.current = ac;
+    setPodcastSpeaking(true);
+    setPodcastMsg("Playing through your speaker…");
+    speakTurnsWebSpeech(
+      podcastTurns,
+      ac.signal,
+      (c, t) => setPodcastMsg(`Playing… ${c}/${t}`),
+      turn => {
+        const id = turn ? turn.id : null;
+        lastPodcastSpeakerRef.current = id;
+        setPodcastActiveSpeaker(id);
+      }
+    )
+      .then(() => {
+        setPodcastSpeaking(false);
+        lastPodcastSpeakerRef.current = null;
+        setPodcastActiveSpeaker(null);
+        setPodcastMsg(
+          podcastAudioUrl
+            ? "Use the player above or download if you want a file."
+            : "Done. Generate again for a new mix."
+        );
+        podcastAbortRef.current = null;
+      })
+      .catch(e => {
+        setPodcastSpeaking(false);
+        lastPodcastSpeakerRef.current = null;
+        setPodcastActiveSpeaker(null);
+        podcastAbortRef.current = null;
+        if (e?.name !== "AbortError") setPodcastMsg("Stopped. Tap Play to continue.");
+      });
+  }, [podcastTurns, podcastAudioUrl]);
+
+  const stopPodcastWebSpeech = useCallback(() => {
+    try {
+      podcastAbortRef.current?.abort();
+    } catch {}
+    try {
+      speechSynthesis.cancel();
+    } catch {}
+    setPodcastSpeaking(false);
+    lastPodcastSpeakerRef.current = null;
+    setPodcastActiveSpeaker(null);
+    podcastAbortRef.current = null;
+    setPodcastMsg("Paused.");
+  }, []);
+
+  const submitPodcastQuestion = useCallback(async () => {
+    const q = podcastQuestionText.trim();
+    if (!q || podcastQuestionBusy) return;
+    const el = podcastAudioRef.current;
+    const curT = el && !podcastBrowserMode && Number.isFinite(el.currentTime) ? el.currentTime : null;
+    const dur = el && Number.isFinite(el.duration) ? el.duration : null;
+    const { excerpt } = buildPodcastQuestionSnippet(
+      podcastTurns,
+      podcastAudioSegments,
+      curT,
+      dur,
+      podcastBrowserMode,
+      podcastActiveSpeaker
+    );
+    if (!apiKey?.trim()) {
+      setPodcastQuestionAnswer("Add your API key in settings (OpenAI, Claude, or Gemini) to get an answer.");
+      return;
+    }
+    setPodcastQuestionBusy(true);
+    setPodcastQuestionAnswer("");
+    try {
+      const system = `You are SunnyD. The student paused a short study podcast (Dee & Ray) and asked one question about what they just heard.
+
+Rules (strict):
+- Answer in plain text only. No markdown, bullets, or headings.
+- Start with the direct answer in ONE sentence.
+- Total length: at most 90 words (about 5–7 short sentences). If you need less, use less.
+- Do not repeat their question, no long intro or recap of the episode, no “great question,” no closing essay.
+- Use the excerpt + notes only; if you cannot answer from them, say so in 1–2 sentences and what to replay.`;
+      const user = JSON.stringify({
+        studentQuestion: q,
+        episodeTitle: podcastTitle,
+        excerptLinesJustHeard: excerpt,
+        noteTitle: note?.title || "Untitled",
+        noteMeta: (noteMetaBlock(note) || "").trim(),
+        studentNotesForContext: content.slice(0, 3500),
+      });
+      const raw = await ai(llmProvider, apiKey, system, user, 280);
+      setPodcastQuestionAnswer(clampPodcastAnswerLength(String(raw || "").trim(), 95));
+    } catch (e) {
+      setPodcastQuestionAnswer(e?.message || "Something went wrong. Try again.");
+    } finally {
+      setPodcastQuestionBusy(false);
+    }
+  }, [
+    podcastQuestionText,
+    podcastQuestionBusy,
+    podcastBrowserMode,
+    podcastTurns,
+    podcastAudioSegments,
+    podcastActiveSpeaker,
+    podcastTitle,
+    apiKey,
+    llmProvider,
+    note,
+    content,
+  ]);
 
   // Open the setup modal for creating a new note (pendingId = future note id)
   function openNewNoteSetup() {
@@ -3396,6 +4970,22 @@ Return the rewritten passage only:`;
               </>
             )}
             <span className="hdr-wc">{wc} words</span>
+            <button
+              type="button"
+              className="hdr-podcast-btn"
+              title="SunnyD Cast — podcast replay from your notes"
+              onClick={e => {
+                e.stopPropagation();
+                setExportOpen(false);
+                setPodcastMinimized(false);
+                setPodcastOpen(true);
+                try {
+                  if (typeof speechSynthesis !== "undefined") speechSynthesis.getVoices();
+                } catch {}
+              }}
+            >
+              ☀️ SunnyD Cast
+            </button>
             <div className="export-wrap" title="Export notes" onClick={e => e.stopPropagation()}>
               <button className="export-btn" onClick={() => setExportOpen(p => !p)}>
                 ↓ Export
@@ -3957,6 +5547,320 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
             </div>
           );
         })()}
+
+        {podcastOpen && createPortal(
+          <div className={podcastMinimized ? "podcast-shell podcast-shell--minimized" : "podcast-shell"}>
+            <div
+              className={`note-setup-overlay${podcastMinimized ? " podcast-overlay--ghost" : ""}`}
+              onClick={podcastMinimized ? undefined : handlePodcastBackdropClick}
+            >
+              <div
+                className="note-setup-modal podcast-modal"
+                onClick={e => {
+                  if (!podcastMinimized) e.stopPropagation();
+                }}
+                style={
+                  podcastMinimized
+                    ? {
+                        position: "absolute",
+                        left: -9999,
+                        top: 0,
+                        width: 440,
+                        maxWidth: "100vw",
+                        opacity: 0,
+                        pointerEvents: "none",
+                        overflow: "hidden",
+                      }
+                    : undefined
+                }
+              >
+                {!podcastMinimized && (
+                  <div className="note-setup-hdr sunnyd-cast-hdr">
+                    <div className="note-setup-hdr-top">
+                      <span className="note-setup-icon">☀️</span>
+                      <span className="note-setup-title">SunnyD Cast</span>
+                      {podcastPhase === "ready" && (
+                        <button
+                          type="button"
+                          className="podcast-minimize-top-btn"
+                          onClick={dockPodcastMinimized}
+                          aria-label="Minimize and keep playing over notes"
+                          title="Minimize over notes"
+                        >
+                          ◱
+                        </button>
+                      )}
+                      <button type="button" className="x-btn" style={{ marginLeft: "auto" }} onClick={closePodcastModal} aria-label="Close">
+                        ×
+                      </button>
+                    </div>
+                    <span className="sunnyd-cast-badge">Study replay</span>
+                    <p className="note-setup-sub">
+                      SunnyD turns your notes (and lecture transcript, if you have one) into a short two-host podcast so you can relearn. Dee and Ray are the voices.
+                    </p>
+                  </div>
+                )}
+                <div className="note-setup-body" style={{ paddingTop: podcastMinimized ? 0 : 12 }}>
+                {!podcastMinimized && (
+                  <>
+                    <div className="podcast-disclosure">
+                      SunnyD builds a script from your notes, then Dee and Ray read it. The finished audio is rendered here so you can replay and relearn.
+                    </div>
+
+                    <div className="podcast-length-row">
+                      <span className="podcast-length-label" id="podcast-length-label">
+                        Episode length (about)
+                      </span>
+                      <input
+                        type="range"
+                        className="podcast-length-slider"
+                        min={2}
+                        max={10}
+                        step={1}
+                        value={clampPodcastMinutes(podcastMaxMinutes)}
+                        onChange={e => setPodcastMaxMinutes(clampPodcastMinutes(Number(e.target.value)))}
+                        disabled={podcastPhase === "script" || podcastPhase === "tts"}
+                        aria-labelledby="podcast-length-label"
+                        aria-valuetext={`${clampPodcastMinutes(podcastMaxMinutes)} minutes max`}
+                      />
+                      <span className="podcast-length-val">{clampPodcastMinutes(podcastMaxMinutes)} min</span>
+                    </div>
+                    <p className="podcast-length-hint">Targets spoken time for the next generate or regenerate.</p>
+                  </>
+                )}
+
+                {(podcastPhase === "script" || podcastPhase === "tts") && (
+                  <div className="pop-thinking" style={{ marginTop: 0 }}>
+                    <div className="pop-thinking-dots">
+                      <span /><span /><span />
+                    </div>
+                    <span className="pop-thinking-txt">{podcastMsg || "Working…"}</span>
+                  </div>
+                )}
+                {podcastPhase === "tts" && podcastTtsProg.total > 0 && (
+                  <div className="podcast-progress-bar">
+                    <div
+                      className="podcast-progress-fill"
+                      style={{ width: `${Math.min(100, (podcastTtsProg.cur / podcastTtsProg.total) * 100)}%` }}
+                    />
+                  </div>
+                )}
+
+                {podcastPhase === "error" && podcastErr && <div className="podcast-err">{podcastErr}</div>}
+
+                {!podcastMinimized && (podcastPhase === "ready" || (podcastPhase === "error" && podcastTurns.length > 0)) && podcastTitle && (
+                  <p className="podcast-progress" style={{ marginBottom: 6 }}>
+                    {podcastTitle}
+                    {podcastPhase === "ready" && podcastVoiceKind === "openai" && (
+                      <span style={{ display: "block", fontSize: 10, fontWeight: 600, color: "#A85F00", marginTop: 4, letterSpacing: "0.06em" }}>
+                        SUNNYD CAST · HIGH QUALITY
+                      </span>
+                    )}
+                    {podcastPhase === "ready" && podcastVoiceKind === "kokoro" && (
+                      <span style={{ display: "block", fontSize: 10, fontWeight: 600, color: "#5E38A0", marginTop: 4, letterSpacing: "0.06em" }}>
+                        SUNNYD CAST · ON THIS DEVICE
+                      </span>
+                    )}
+                  </p>
+                )}
+                {!podcastMinimized && podcastPhase === "ready" && podcastMsg && (
+                  <p style={{ fontSize: 12.5, color: "var(--ink2)", lineHeight: 1.5, margin: "0 0 8px" }}>{podcastMsg}</p>
+                )}
+
+                {!podcastMinimized && podcastTurns.length > 0 && (podcastPhase === "ready" || podcastPhase === "error") && (
+                  <div className="podcast-speakers">
+                    {(() => {
+                      const deeName = podcastTurns.find(t => t.id === "host_a")?.displayName || "Dee";
+                      const rayName = podcastTurns.find(t => t.id === "host_b")?.displayName || "Ray";
+                      const useFileAnalyser = !!(podcastAudioUrl && !podcastBrowserMode && podcastPhase === "ready");
+                      return (
+                        <>
+                          <PodcastWavePanel
+                            label={deeName}
+                            variant="dee"
+                            isActive={podcastActiveSpeaker === "host_a"}
+                            analyserRef={podcastAnalyserRef}
+                            audioRef={podcastAudioRef}
+                            useAnalyserPath={useFileAnalyser}
+                            simulateActive={podcastSpeaking && podcastActiveSpeaker === "host_a"}
+                          />
+                          <PodcastWavePanel
+                            label={rayName}
+                            variant="ray"
+                            isActive={podcastActiveSpeaker === "host_b"}
+                            analyserRef={podcastAnalyserRef}
+                            audioRef={podcastAudioRef}
+                            useAnalyserPath={useFileAnalyser}
+                            simulateActive={podcastSpeaking && podcastActiveSpeaker === "host_b"}
+                          />
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+
+                {podcastPhase === "ready" && podcastAudioUrl && (
+                  <audio
+                    ref={podcastAudioRef}
+                    key={podcastAudioUrl}
+                    className="podcast-audio"
+                    controls={!podcastMinimized}
+                    src={podcastAudioUrl}
+                    preload="metadata"
+                    onLoadedMetadata={syncPodcastSpeakerFromAudio}
+                    onSeeked={syncPodcastSpeakerFromAudio}
+                    onEnded={() => {
+                      lastPodcastSpeakerRef.current = null;
+                      setPodcastActiveSpeaker(null);
+                    }}
+                  />
+                )}
+
+                {!podcastMinimized && podcastPhase === "ready" && podcastQuestionOpen && (
+                  <PodcastQuestionPanel
+                    questionText={podcastQuestionText}
+                    setQuestionText={setPodcastQuestionText}
+                    answer={podcastQuestionAnswer}
+                    busy={podcastQuestionBusy}
+                    onSubmit={submitPodcastQuestion}
+                    onCloseResume={closePodcastQuestionResume}
+                    noApiKey={!apiKey?.trim()}
+                  />
+                )}
+
+                {!podcastMinimized && podcastPhase === "ready" && (
+                  <div className="podcast-actions">
+                    <button type="button" className="lecture-panel-btn podcast-q-open-btn" onClick={openPodcastQuestion} disabled={podcastQuestionBusy}>
+                      ? Ask about this moment
+                    </button>
+                    {podcastTurns.length > 0 && (!podcastAudioUrl || podcastBrowserMode) && (
+                      <>
+                        <button
+                          type="button"
+                          className="note-setup-go"
+                          style={{ boxShadow: "none" }}
+                          disabled={podcastSpeaking}
+                          onClick={playPodcastWebSpeech}
+                        >
+                          {podcastSpeaking ? "Playing…" : "▶ Play (speaker)"}
+                        </button>
+                        {podcastSpeaking && (
+                          <button type="button" className="note-setup-skip" onClick={stopPodcastWebSpeech}>
+                            Stop
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {podcastAudioUrl && (
+                      <button
+                        type="button"
+                        className="lecture-panel-btn"
+                        onClick={() => {
+                          const safe = ("sunnyd-cast-" + (podcastTitle || "episode")).replace(/[^\w\s-]+/g, "").replace(/\s+/g, "-").slice(0, 72) || "sunnyd-cast-episode";
+                          const a = document.createElement("a");
+                          a.href = podcastAudioUrl;
+                          a.download = `${safe}.wav`;
+                          a.rel = "noopener";
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                        }}
+                      >
+                        ⬇ Download episode
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {!podcastMinimized && (
+                <div className="note-setup-footer" style={{ marginTop: 6, flexWrap: "wrap", justifyContent: "space-between" }}>
+                  <button type="button" className="note-setup-skip" onClick={closePodcastModal}>
+                    Close
+                  </button>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {podcastPhase === "ready" && (
+                      <button type="button" className="lecture-panel-btn" onClick={dockPodcastMinimized}>
+                        Minimize · keep playing
+                      </button>
+                    )}
+                    {(podcastPhase === "idle" || podcastPhase === "error" || podcastPhase === "ready") && podcastPhase !== "script" && podcastPhase !== "tts" && (
+                      <button
+                        type="button"
+                        className="note-setup-go"
+                        disabled={podcastPhase === "script" || podcastPhase === "tts"}
+                        onClick={() => runStudyPodcast()}
+                      >
+                        {podcastPhase === "ready" ? "Regenerate" : "Generate SunnyD Cast"}
+                      </button>
+                    )}
+                    {podcastPhase === "ready" && (
+                      <button type="button" className="lecture-panel-btn" onClick={resetPodcastSession}>
+                        New episode
+                      </button>
+                    )}
+                  </div>
+                </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>,
+          document.body
+        )}
+
+        {podcastOpen && podcastMinimized && podcastPhase === "ready" &&
+          createPortal(
+            (() => {
+              const deeName = podcastTurns.find(t => t.id === "host_a")?.displayName || "Dee";
+              const rayName = podcastTurns.find(t => t.id === "host_b")?.displayName || "Ray";
+              const useFileAnalyser = !!(podcastAudioUrl && !podcastBrowserMode);
+              const waveBase = {
+                analyserRef: podcastAnalyserRef,
+                audioRef: podcastAudioRef,
+                useAnalyserPath: useFileAnalyser,
+              };
+              return (
+                <PodcastFloatingDock
+                  position={podcastFloatPos}
+                  setPosition={setPodcastFloatPos}
+                  title={podcastTitle}
+                  wavePropsDee={{
+                    variant: "dee",
+                    label: deeName,
+                    ...waveBase,
+                    isActive: podcastActiveSpeaker === "host_a",
+                    simulateActive: podcastSpeaking && podcastActiveSpeaker === "host_a",
+                  }}
+                  wavePropsRay={{
+                    variant: "ray",
+                    label: rayName,
+                    ...waveBase,
+                    isActive: podcastActiveSpeaker === "host_b",
+                    simulateActive: podcastSpeaking && podcastActiveSpeaker === "host_b",
+                  }}
+                  audioRef={podcastAudioRef}
+                  hasFileAudio={!!podcastAudioUrl && !podcastBrowserMode}
+                  webSpeech={
+                    podcastBrowserMode && podcastTurns.length > 0
+                      ? { speaking: podcastSpeaking, onPlay: playPodcastWebSpeech, onStop: stopPodcastWebSpeech }
+                      : null
+                  }
+                  onExpand={expandPodcastFromDock}
+                  onClose={closePodcastModal}
+                  onQuestion={openPodcastQuestion}
+                  questionOpen={podcastQuestionOpen}
+                  questionText={podcastQuestionText}
+                  setQuestionText={setPodcastQuestionText}
+                  questionAnswer={podcastQuestionAnswer}
+                  questionBusy={podcastQuestionBusy}
+                  onQuestionSubmit={submitPodcastQuestion}
+                  onQuestionCloseResume={closePodcastQuestionResume}
+                  noApiKey={!apiKey?.trim()}
+                />
+              );
+            })(),
+            document.body
+          )}
 
         {/* ── Note setup modal (new note or edit metadata) ── */}
         {noteSetupModal && createPortal(
