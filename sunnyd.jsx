@@ -439,6 +439,11 @@ function clampPodcastAnswerLength(s, maxWords = 95) {
   return `${parts.slice(0, maxWords).join(" ")}…`;
 }
 
+/* Detect Mac once at module load — used for keyboard shortcut labels throughout */
+const IS_MAC = typeof navigator !== "undefined" &&
+  (/Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent));
+const MOD_KEY = IS_MAC ? '⌘' : 'Ctrl';
+
 const LS_CAST_MAX_MIN = "sd_cast_max_min";
 const LS_CAST_FLOAT = "sd_cast_float_pos";
 const PODCAST_FLOAT_W = 300;
@@ -1655,6 +1660,8 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .note-row.on .nr-lbl{color:var(--ink);font-weight:600;}
 .sb-footer{margin-top:auto;padding-top:14px;border-top:1px solid var(--rule);}
 .sb-autosave{font-size:9.5px;color:#1A6835;font-weight:600;margin-bottom:10px;opacity:.75;letter-spacing:.01em;}
+.sb-autosave.just-saved{animation:savedFlash .9s ease forwards;}
+@keyframes savedFlash{0%{opacity:1;color:#1A6835}30%{opacity:.9;color:#117a32}100%{opacity:.75;color:#1A6835}}
 .sb-autosave.sb-disk{margin-bottom:8px;}
 .sb-disk-btn{display:block;width:100%;margin-bottom:12px;padding:6px 10px;font-size:10px;font-weight:600;font-family:'DM Sans',sans-serif;color:var(--ink2);background:var(--paper);border:1px solid var(--rule2);border-radius:6px;cursor:pointer;transition:all .15s;}
 .sb-disk-btn:hover{background:var(--page);border-color:var(--ink3);color:var(--ink);}
@@ -1759,7 +1766,7 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 
 /* ── Annotation column ── */
 .ann-col{width:260px;flex-shrink:0;min-height:0;padding:24px 14px 80px 14px;background:var(--paper);border-left:1px solid rgba(215,205,188,.55);overflow-y:auto;}
-.ann-col-hdr{font-size:7px;font-weight:700;text-transform:uppercase;letter-spacing:.18em;color:var(--ink3);opacity:.4;margin-bottom:10px;padding:0;}
+.ann-col-hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--ink3);opacity:.55;margin-bottom:10px;padding:0;}
 .ann-col-body{position:relative;width:100%;overflow:visible;}
 .ann-empty{padding:12px 0;font-family:'DM Sans',sans-serif;font-size:11px;color:var(--ink3);line-height:1.5;opacity:.65;}
 
@@ -2309,23 +2316,23 @@ const PROVIDERS = [
 /* ─── Toolbar ────────────────────────────────────────────────────────────── */
 function Toolbar({ editor }) {
   if (!editor) return null;
-  const btn = (label, action, activeCheck) => (
+  const btn = (label, action, activeCheck, tooltip) => (
     <button
       className={`editor-toolbar-btn${editor.isActive(activeCheck) ? " active" : ""}`}
       onMouseDown={e => { e.preventDefault(); action(); }}
-      title={label}
+      title={tooltip || label}
     >
       {label}
     </button>
   );
   return (
     <div className="editor-toolbar">
-      {btn("B",    () => editor.chain().focus().toggleBold().run(),        "bold")}
-      {btn("I",    () => editor.chain().focus().toggleItalic().run(),      "italic")}
-      {btn("H1",   () => editor.chain().focus().toggleHeading({ level: 1 }).run(), { type: "heading", attrs: { level: 1 } })}
-      {btn("H2",   () => editor.chain().focus().toggleHeading({ level: 2 }).run(), { type: "heading", attrs: { level: 2 } })}
-      {btn("• List", () => editor.chain().focus().toggleBulletList().run(), "bulletList")}
-      {btn("</>",  () => editor.chain().focus().toggleCodeBlock().run(),   "codeBlock")}
+      {btn("B",       () => editor.chain().focus().toggleBold().run(),                    "bold",     `Bold (${MOD_KEY}+B)`)}
+      {btn("I",       () => editor.chain().focus().toggleItalic().run(),                  "italic",   `Italic (${MOD_KEY}+I)`)}
+      {btn("H1",      () => editor.chain().focus().toggleHeading({ level: 1 }).run(),     { type: "heading", attrs: { level: 1 } }, "Heading 1")}
+      {btn("H2",      () => editor.chain().focus().toggleHeading({ level: 2 }).run(),     { type: "heading", attrs: { level: 2 } }, "Heading 2")}
+      {btn("• List",  () => editor.chain().focus().toggleBulletList().run(),              "bulletList", "Bullet list")}
+      {btn("</> Block", () => editor.chain().focus().toggleCodeBlock().run(),             "codeBlock",  "Code block")}
     </div>
   );
 }
@@ -2875,6 +2882,7 @@ export default function SunnyDNotes() {
   const lectureTimerRef = useRef(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [savingToDisk, setSavingToDisk] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [podcastOpen, setPodcastOpen] = useState(false);
   const [podcastPhase, setPodcastPhase] = useState("idle");
@@ -3549,9 +3557,10 @@ Rules (strict):
     if (pendingId !== null) {
       // Creating a new note
       const meta = skip ? {} : { subject: subject.trim(), professor: professor.trim(), goal: goal.trim() };
-      const newNote = { id: pendingId, title: 'Untitled', content: '', ...meta };
+      const newNote = { id: pendingId, title: 'Untitled', content: '', createdAt: Date.now(), ...meta };
       setNotes(p => [...p, newNote]);
       setActiveId(pendingId);
+      setTimeout(() => document.querySelector('.title-inp')?.focus(), 80);
       setGhost(null); setGhostThinking(false);
       setSelMenu(null); setSelThinking(null); setSelRes(null);
       setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false);
@@ -3657,6 +3666,7 @@ Rules (strict):
   /* ── Persist notes to localStorage on every change; if disk file is active, write there too (debounced) ── */
   useEffect(() => {
     saveNotes(notes);
+    setLastSavedAt(Date.now());
     // Generate/update embedding for the active note if content changed
     const currentNote = notes.find(n => n.id === activeId);
     if (currentNote) {
@@ -4399,7 +4409,11 @@ Context after selection:
       const explanation = (parsed.explanation ?? "").trim() ||
         { summarize: "Replacing your selection with a concise summary.", expand: "Adding expanded content after your selection.", explain: "Adding a plain-language explanation after your selection." }[action];
       setSelRes({ action, text, op, explanation, original: t, start, end, x, y, below });
-    } catch { setSelRes(null); }
+    } catch (err) {
+      const errMsg = err?.message?.includes("API key") ? "API key issue — check your key in the header." : "Something went wrong. Please try again.";
+      setSelRes({ action, text: null, op, explanation: errMsg, original: t, start, end, x, y, below, isError: true });
+      setTimeout(() => setSelRes(null), 3500);
+    }
     finally { busyWithSelAction.current = false; setSelThinking(null); }
   };
 
@@ -4749,7 +4763,7 @@ Return the rewritten passage only:`;
     return () => el.removeEventListener("scroll", onScroll);
   }, [selMenu]);
 
-  /* ── Global ⌘K / Ctrl+K to toggle search palette ── */
+  /* ── Global ⌘K / Ctrl+K to toggle search palette; ⌘N / Ctrl+N for new note ── */
   useEffect(() => {
     const isMac = navigator.platform.toUpperCase().includes("MAC");
     const onKey = e => {
@@ -4757,10 +4771,15 @@ Return the rewritten passage only:`;
         e.preventDefault();
         setSearchOpen(prev => !prev);
       }
+      if ((isMac ? e.metaKey : e.ctrlKey) && e.key === "n") {
+        e.preventDefault();
+        openNewNoteSetup();
+      }
       if (e.key === "Escape") setSearchOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ── Weave overlay: removed (hl-layer replaced by Tiptap editor) ── */
@@ -4926,7 +4945,7 @@ Return the rewritten passage only:`;
   // Skeletons only show while AI is generating suggestions — NOT when user runs selection actions (expand/summarize/explain)
   const showThinking = busy && activeSugg.length === 0 && !busyWithSelAction.current;
 
-  const wc = (content.match(/\S+/g) || []).length;
+  const wc = (content.replace(/<[^>]*>/g, ' ').match(/\S+/g) || []).length;
 
   const SEL_ACTS = [
     { key: "summarize", icon: "◈", label: "Summarize" },
@@ -5270,22 +5289,32 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
           {/* Notes sidebar */}
           <aside className="notes-sb">
             <div className="sb-top-row">
-              <button className="new-btn" onClick={() => openNewNoteSetup()}>+ New Note</button>
-              <button className="search-btn" title="Search notes (⌘K)" onClick={() => setSearchOpen(true)}>⌕</button>
+              <button className="new-btn" title={`New note (${MOD_KEY}+N)`} onClick={() => openNewNoteSetup()}>+ New Note</button>
+              <button className="search-btn" title={`Search notes (${MOD_KEY}+K)`} onClick={() => setSearchOpen(true)}>⌕</button>
             </div>
-            {notes.map(n => (
-              <div key={n.id} className={`note-row${n.id === activeId ? " on" : ""}`}
-                onClick={() => { setActiveId(n.id); setGhost(null); setGhostThinking(false); setSelMenu(null); setSelThinking(null); setSelRes(null); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); }}>
-                <div className="nr-pip" />
-                <span className="nr-lbl">{n.title || "Untitled"}</span>
-              </div>
-            ))}
+            {notes.map(n => {
+              const switchNote = () => { setActiveId(n.id); setGhost(null); setGhostThinking(false); setSelMenu(null); setSelThinking(null); setSelRes(null); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); };
+              return (
+                <div
+                  key={n.id}
+                  role="button"
+                  tabIndex={0}
+                  title={n.title || "Untitled"}
+                  className={`note-row${n.id === activeId ? " on" : ""}`}
+                  onClick={switchNote}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchNote(); } }}
+                >
+                  <div className="nr-pip" />
+                  <span className="nr-lbl">{n.title || "Untitled"}</span>
+                </div>
+              );
+            })}
             <div className="sb-footer">
               {savingToDisk ? (
-                <div className="sb-autosave sb-disk">✓ Saved to disk</div>
+                <div key={lastSavedAt} className="sb-autosave sb-disk just-saved">✓ Saved to disk</div>
               ) : (
                 <>
-                  <div className="sb-autosave">✓ Notes saved locally</div>
+                  <div key={lastSavedAt} className="sb-autosave just-saved">✓ Notes saved locally</div>
                   {supportsFileAccess() && (
                     <button type="button" className="sb-disk-btn" onClick={saveNotesToDisk}>
                       Save to file on disk
@@ -5298,6 +5327,8 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                 ["Fact checks",  "Right panel — hover to highlight"],
                 ["Completion",   "Tab to accept"],
                 ["Selection",    "Highlight text to transform"],
+                ["New note",     `${MOD_KEY}+N`],
+                ["Search",       `${MOD_KEY}+K`],
               ].map(([h, d]) => (
                 <div key={h} className="sb-item"><div className="sb-h">{h}</div><div className="sb-d">{d}</div></div>
               ))}
@@ -5313,7 +5344,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                 <div className="margin-line" />
                 <input className="title-inp" value={note.title} onChange={e => setTitle(e.target.value)} placeholder="Untitled" />
                 <div className="meta-row">
-                  <span>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</span>
+                  <span>{new Date(note.createdAt || Date.now()).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</span>
                   {activeSugg.length > 0 && <span className="ann-badge">{activeSugg.length} suggestions</span>}
                 </div>
                 {/* Note metadata chips — shown when at least one field is set */}
@@ -5373,7 +5404,13 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                   {/* Result card is now a floating portal — rendered elsewhere */}
                 </div>
 
-                {/* Hint bar: shows Tab/Esc when ghost is visible */}
+                {/* Hint bar: loading state while ghost is fetching, or Tab/Esc when ready */}
+                {ghostThinking && !ghost && (
+                  <div className="ghost-hint">
+                    <span className="ghost-hint-txt" style={{ opacity: .5 }}>thinking…</span>
+                    <ThinkDots />
+                  </div>
+                )}
                 {ghost && (
                   <div className="ghost-hint">
                     <span className="ghost-hint-txt">"{ghost.text.trim().slice(0, 60)}{ghost.text.length > 60 ? "…" : ""}"</span>
@@ -5538,10 +5575,16 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                 <span className="sel-result-orig">"{selRes.original.slice(0, 55)}{selRes.original.length > 55 ? "…" : ""}"</span>
                 <button className="sel-result-close" onClick={() => setSelRes(null)}>×</button>
               </div>
-              <div className="sel-result-body" dangerouslySetInnerHTML={{ __html: mdToHtml(selRes.text) }} />
-              {selRes.explanation && <div className="sel-result-expl">{selRes.explanation}</div>}
+              {selRes.isError ? (
+                <div className="sel-result-body" style={{ color: "var(--red)", fontStyle: "italic" }}>{selRes.explanation}</div>
+              ) : (
+                <>
+                  <div className="sel-result-body" dangerouslySetInnerHTML={{ __html: mdToHtml(selRes.text) }} />
+                  {selRes.explanation && <div className="sel-result-expl">{selRes.explanation}</div>}
+                </>
+              )}
               <div className="sel-result-btns">
-                <button className="btn-fill" style={{ flex: 1 }} onClick={weaveSelResult}>✓ Apply</button>
+                {!selRes.isError && <button className="btn-fill" style={{ flex: 1 }} onClick={weaveSelResult}>✓ Apply</button>}
                 <button className="btn-out" onClick={() => setSelRes(null)}>Dismiss</button>
               </div>
             </div>
