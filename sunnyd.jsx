@@ -4337,7 +4337,7 @@ If the fragment could already be a complete sentence (they may have just forgott
     const mouseY = e.clientY;
     setTimeout(() => {
       const selectedText = (editorRef.current?.getSelection() || "").trim();
-      if (!selectedText || selectedText.length < 10) { setSelMenu(null); return; }
+      if (!selectedText) { setSelMenu(null); return; }
       const start = content.indexOf(selectedText);
       const end = start !== -1 ? start + selectedText.length : -1;
       // Use the actual selection rect for precise positioning; fall back to mouse pos
