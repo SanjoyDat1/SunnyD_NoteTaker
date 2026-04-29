@@ -39,6 +39,29 @@ async function composeDraft(aiFn, title, instructions, noteContext) {
   return (t || "").trim();
 }
 
+/**
+ * Tab-separated rows for Sheets API (USER_ENTERED — leading = formulas work).
+ */
+async function composeSpreadsheetDraft(aiFn, title, instructions, noteContext) {
+  const system = `You are filling a Google Sheets workbook via the API.
+
+Output TAB-SEPARATED text only — one ROW per LINE. Columns separated by SINGLE tab characters (\t conceptually as literal tab delimiter in your answer).
+Rules:
+• Row 1 = column headers.
+• Prefer live stock prices via Google Sheets formulas exactly like =GOOGLEFINANCE("AAPL","price") in the cell column for CURRENT price (omit $ in formula).
+• Use VALID US ticker symbols (Apple=AAPL). If instructions say APPL, use AAPL in formulas/instructions rows.
+• Add a subtitle row describing the sheet if helpful (still tab-separated columns or single cell row).
+• No Markdown, no preamble, no code fences — ONLY data rows starting at line 1.
+• At least 6 rows whenever tickers/quotes/stocks are requested: headers + companies/tickers/formulas/metadata as needed.
+
+The user edits and verifies data; cite no investment advice beyond listing prices.`;
+
+  const user = `Spreadsheet title: ${title}\n\nBuild-instructions:\n${instructions}\n\nNote context:\n${noteContext.slice(0, 8000)}\n\nWrite all rows now.`;
+
+  const t = await aiFn(system, user, 5000);
+  return (t || "").trim();
+}
+
 async function composeDeliverableMarkdown(aiFn, title, instructions, noteContext) {
   const system =
     `You are helping the user draft a deliverable FOR THEIR REVIEW.
@@ -106,13 +129,13 @@ export async function runAssignmentJob(p) {
 
     if (type === "sheet") {
       await patchJob(jobId, { step: "Building sheet…", driveFileId: fileId });
-      const draftMd = await composeDraft(
+      const draftMd = await composeSpreadsheetDraft(
         aiFn,
         title,
-        (payload.instructionsSummary || "") + "\nUse rows; separate columns with tabs where helpful.",
+        payload.instructionsSummary || "",
         noteContext
       );
-      const lines = draftMd.split("\n").filter(Boolean).slice(0, 120);
+      const lines = draftMd.split("\n").filter(Boolean).slice(0, 200);
       const rows = lines.map(line => (line.includes("\t") ? line.split("\t") : [line]));
       await appendSheetValues(fileId, "Sheet1!A1", rows);
       const url = await fetchDriveLink(fileId);
