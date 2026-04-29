@@ -70,6 +70,16 @@ Turns your notes (and lecture transcript, if present) into a short two-host podc
 - **Save to disk** — optionally save notes to a JSON file on your machine (Chrome/Edge; File System Access API).
 - **Search** — semantic vector search across all notes (OpenAI/Gemini) or keyword scoring (Claude).
 
+### Google Workspace (optional)
+
+When you add an OAuth 2.0 **client ID for a browser app** at build time (`VITE_GOOGLE_CLIENT_ID`), the header **G** menu lets you connect your Google account. SunnyD can then (with your confirmation):
+
+- Propose **Calendar** events when it detects a verifiable date/time in your notes.
+- Propose **meeting invites** when it finds times and email addresses in the note; you edit details, then invites are sent via Google Calendar.
+- Queue **assignment drafts** as a new Google Doc, Google Sheet, or Gmail draft (drafts are for your review; you are responsible for academic integrity).
+
+OAuth **access and refresh tokens** are stored in **IndexedDB** in your browser. Requests go **directly from your browser to Google** and to your chosen LLM provider — there is still no SunnyD backend.
+
 ---
 
 ## Quick start
@@ -82,12 +92,27 @@ Turns your notes (and lecture transcript, if present) into a short two-host podc
   - [Claude](https://console.anthropic.com/settings/keys) — Haiku
   - [Gemini](https://aistudio.google.com/apikey) — Flash Lite
 
+### Google Cloud (optional, for Workspace integration)
+
+SunnyD completes OAuth **in the browser** with PKCE (no SunnyD server). You can use either setup:
+
+**A — Recommended (no secret in the app)**  
+1. **Credentials** → **OAuth client ID** → type **Single Page Application**.  
+2. Add **Authorized JavaScript origins** (e.g. `http://localhost:5173`) and **Authorized redirect URIs** (e.g. `http://localhost:5173/` — trailing slash must match).  
+3. Put only `VITE_GOOGLE_CLIENT_ID` in `.env`.
+
+**B — “Web application” OAuth client (confidential)**  
+Google’s token endpoint expects a **`client_secret`** for this client type, which is why you may see `client_secret is missing` if the secret is not sent. For **local use only**, you may add the client secret from Google Cloud (Credentials → your OAuth 2.0 client) to `.env` as `VITE_GOOGLE_CLIENT_SECRET=...` and restart Vite. **Do not commit `.env`.** Do not publish a static build that embeds the secret if the site is public — anyone can read it from the JS bundle; use (A) for production.
+
+**Everyone:** enable APIs: **Google Calendar**, **Google Drive**, **Google Docs**, **Google Sheets**, **Gmail API**. Copy the client ID into `.env` as `VITE_GOOGLE_CLIENT_ID=...`.
+
 ### Install and run
 
 ```bash
 git clone https://github.com/SanjoyDat1/SunnyD_NoteTaker.git
 cd SunnyD_NoteTaker
 npm install
+# Optional: cp .env.example .env and set VITE_GOOGLE_CLIENT_ID (never commit .env with secrets)
 npm run dev
 ```
 
@@ -116,8 +141,10 @@ The built app is in `dist/`. Serve that folder with any static host (GitHub Page
 | Cast episode length | `sessionStorage` (`sd_cast_max_min`) | 2–10 min |
 | Mini player position | `sessionStorage` (`sd_cast_float_pos`) | Draggable dock coords |
 | Notes (disk file) | JSON file you choose | Opt-in; Chrome/Edge only. |
+| Google OAuth tokens | `IndexedDB` (`sunnyd_google_db`) | Only if you connect Workspace; persists until disconnect or site data cleared. |
+| Workspace UI toggles | `sessionStorage` | e.g. `sd_workspace_enabled`, per-feature switches |
 
-**No data is sent to any server except the LLM provider you select.** The AI provider receives only the text of your current note (and relevant context) when a suggestion is triggered.
+There is **no SunnyD backend**: your notes stay in the browser. **LLM providers** receive text only when you use AI features. If you enable **Google Workspace**, your browser also sends data **directly to Google’s APIs** (Calendar, Drive, Docs, Sheets, Gmail) using your OAuth token — SunnyD never proxies that traffic through a separate server.
 
 ---
 
@@ -126,9 +153,10 @@ The built app is in `dist/`. Serve that folder with any static host (GitHub Page
 ```
 SunnyD_NoteTaker/
 ├── index.html          # Entry HTML
-├── sunnyd.jsx          # Entire app — UI, logic, styles, persistence, export
+├── sunnyd.jsx          # Main app — UI, logic, styles, persistence, export
 ├── src/
-│   └── main.jsx        # React mount point and error boundary
+│   ├── main.jsx        # React mount point and error boundary
+│   └── google/         # Google OAuth (PKCE), Calendar/Drive/Docs/Sheets/Gmail helpers, job runner
 ├── public/
 │   └── sunnyd-logo.png
 ├── package.json
@@ -138,7 +166,7 @@ SunnyD_NoteTaker/
 └── SECURITY.md
 ```
 
-Everything lives in `sunnyd.jsx` — components, CSS (injected via `<style>`), persistence helpers, AI calls, and the TipTap editor setup.
+Most UI and behaviour live in `sunnyd.jsx` (CSS injected via `<style>`). Optional Google Workspace logic is modularized under [`src/google/`](src/google/) for OAuth and REST calls.
 
 ---
 

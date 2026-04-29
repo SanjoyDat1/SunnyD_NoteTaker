@@ -9,6 +9,16 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import { getGoogleClientId } from "./src/google/constants.js";
+import { beginGoogleAuthorization, completeAuthorizationFromUrlIfPresent } from "./src/google/oauthPkce.js";
+import { persistNewTokens, disconnectGoogle, isGoogleConnected } from "./src/google/auth.js";
+import { insertCalendarEvent } from "./src/google/calendarApi.js";
+import { analyzeWorkspaceContent, idemKey } from "./src/google/detectors.js";
+import { buildWorkspaceLedgerSnippet } from "./src/google/workspaceLedger.js";
+import { normalizeCalendarDates } from "./src/google/calendarDefaults.js";
+import { plainTextMatchesSourceQuote } from "./src/google/workspaceQuotes.js";
+import { hasIdempotency, setIdempotency, saveJob, listJobs, getJob } from "./src/google/db.js";
+import { resumePendingAssignmentJobs } from "./src/google/workspaceJob.js";
 
 /* ─── LLM: OpenAI · Claude · Gemini ─────────────────────────────────────── */
 // Lightest/fastest model per provider as of March 2026
@@ -446,6 +456,11 @@ const MOD_KEY = IS_MAC ? '⌘' : 'Ctrl';
 
 const LS_CAST_MAX_MIN = "sd_cast_max_min";
 const LS_CAST_FLOAT = "sd_cast_float_pos";
+const LS_WS_MASTER = "sd_workspace_enabled";
+const LS_WS_CAL = "sd_workspace_cal";
+const LS_WS_ASSIGN = "sd_workspace_assign";
+const LS_WS_INV = "sd_workspace_invites";
+const LS_WS_LINK = "sd_workspace_insert_link";
 const PODCAST_FLOAT_W = 300;
 const PODCAST_FLOAT_H = 340;
 
@@ -1522,6 +1537,32 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .sugg-freq-btn{padding:4px 12px;border-radius:6px;border:1px solid var(--rule);background:var(--page);font-size:11px;font-weight:500;color:var(--ink2);cursor:pointer;transition:all .2s;font-family:'DM Sans',sans-serif;}
 .sugg-freq-btn:hover{border-color:var(--rule2);color:var(--ink);}
 .sugg-freq-btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink);}
+.hdr-ws-act-wrap{position:relative;}
+.hdr-ws-act-btn{padding:5px 9px;border-radius:6px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .15s;}
+.hdr-ws-act-btn:hover{border-color:rgba(26,109,139,.42);background:rgba(232,246,251,.72);color:#115E83;}
+.hdr-ws-act-panel{
+  position:absolute;top:calc(100% + 6px);right:0;z-index:10010;width:min(420px,calc(100vw - 28px));max-height:min(340px,50vh);overflow:auto;
+  background:var(--page);border:1px solid var(--rule2);border-radius:10px;
+  box-shadow:0 8px 28px rgba(50,35,15,.13),0 2px 8px rgba(50,35,15,.07);
+  animation:cardRise .18s cubic-bezier(.22,1,.36,1);padding:10px 0 12px;text-align:left;
+}
+.hdr-ws-act-ph{font-size:11px;font-weight:700;padding:2px 14px 10px;color:var(--ink2);letter-spacing:.04em;text-transform:uppercase;}
+.hdr-ws-act-empty{font-size:12px;color:var(--ink3);padding:4px 14px;line-height:1.45;}
+.hdr-ws-act-list{list-style:none;margin:0;padding:0;}
+.hdr-ws-act-row{display:flex;align-items:flex-start;flex-wrap:wrap;gap:6px 10px;padding:8px 14px;border-bottom:1px solid var(--rule);}
+.hdr-ws-act-row:last-child{border-bottom:none;}
+.hdr-ws-act-st{font-size:9px;font-weight:700;text-transform:uppercase;}
+.hdr-ws-st-running{color:#A85F00;}
+.hdr-ws-st-queued{color:var(--ink3);}
+.hdr-ws-st-done{color:#1A6835;}
+.hdr-ws-st-failed{color:var(--red);}
+.hdr-ws-act-title{flex:1;min-width:120px;font-size:12px;color:var(--ink);line-height:1.35;}
+.hdr-ws-act-link,.hdr-ws-act-retry{font-size:11px;font-weight:600;}
+.hdr-ws-act-link{color:#115E83;text-decoration:none;}
+.hdr-ws-act-link:hover{text-decoration:underline;}
+.hdr-ws-act-retry{padding:2px 8px;border-radius:5px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;font-family:inherit;}
+.hdr-ws-act-retry:hover{border-color:rgba(194,71,71,.42);background:rgba(255,245,243,.92);}
+.hdr-ws-act-hint{font-size:10px;color:var(--ink3);padding:12px 14px 0;margin:8px 0 0;border-top:1px solid var(--rule);line-height:1.45;}
 .hdr-r{display:flex;align-items:center;gap:10px;}
 .hdr-llm-select{padding:4px 8px;border-radius:5px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:500;color:var(--ink2);cursor:pointer;transition:border-color .15s;}
 .hdr-llm-select:hover{border-color:var(--rule2);}
@@ -1987,6 +2028,7 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .note-setup-body{padding:20px 22px 8px;display:flex;flex-direction:column;gap:14px;}
 .note-setup-field{display:flex;flex-direction:column;gap:5px;}
 .note-setup-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);}
+.note-setup-hint{font-size:10.5px;color:var(--ink3);line-height:1.4;margin-top:2px;opacity:.92;}
 .note-setup-input{
   padding:9px 12px;
   background:var(--paper);border:1.5px solid var(--rule2);border-radius:8px;
@@ -2303,6 +2345,151 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 /* ── Shared animations ── */
 @keyframes fadeSoft{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.workspace-wrap{position:relative;}
+.hdr-ws-rail-pos{padding-bottom:0;}
+.ws-agent-rail{
+  pointer-events:none;position:absolute;left:-6px;right:-6px;bottom:-5px;height:3px;border-radius:2px;
+  overflow:hidden;opacity:0;transition:opacity .45s cubic-bezier(.22,1,.36,1);
+}
+.ws-agent-rail.on{opacity:1;}
+.ws-agent-rail-track{position:absolute;inset:0;border-radius:inherit;opacity:.96;}
+.ws-agent-rail[data-phase='wait'] .ws-agent-rail-track{
+  background:linear-gradient(105deg,rgba(26,104,53,.06),rgba(26,104,53,.52),rgba(26,148,91,.72),rgba(26,104,53,.52),rgba(26,104,53,.06));
+  background-size:220% 100%;
+  animation:wsRailSweep 5.5s cubic-bezier(.37,.01,.2,1) infinite;
+}
+.ws-agent-rail[data-phase='extract'] .ws-agent-rail-track{
+  background:linear-gradient(105deg,rgba(26,104,53,.42),rgba(36,174,112,.94),rgba(26,104,53,.52));
+  background-size:240% 100%;
+  animation:wsRailSweep 1.85s cubic-bezier(.35,.15,.25,1) infinite;
+}
+.ws-agent-rail[data-phase='cloud'] .ws-agent-rail-track{
+  background:linear-gradient(105deg,rgba(66,134,217,.52),rgba(26,104,53,.74),rgba(66,134,217,.48));
+  background-size:260% 100%;
+  animation:wsRailSweep 2.85s cubic-bezier(.35,.12,.35,1) infinite;
+}
+.ws-agent-rail[data-phase='idle'] .ws-agent-rail-track{animation:none;}
+
+@keyframes wsRailSweep{0%{background-position:-30% 0}100%{background-position:130% 0}}
+
+/* Header: quick Google integrations on/off — same backing state as “Enable automation” under G */
+.hdr-google-toggle{
+  display:inline-flex;align-items:center;gap:7px;margin:0;padding:2px 0;
+  font-size:11px;font-weight:600;color:var(--ink2);font-family:inherit;user-select:none;
+}
+.hdr-google-toggle .hdr-google-toggle-lbl{font-size:11px;letter-spacing:-.01em;white-space:nowrap;}
+.hdr-google-sw{
+  position:relative;width:42px;height:22px;margin:0;flex-shrink:0;border-radius:12px;padding:0;
+  border:1px solid var(--rule2);background:var(--rule);cursor:pointer;transition:background .18s ease,border-color .18s ease;
+}
+.hdr-google-sw-on{background:rgba(26,104,53,.42);border-color:rgba(26,104,53,.52);}
+.hdr-google-sw:focus-visible{outline:2px solid rgba(26,104,53,.42);outline-offset:2px;}
+.hdr-google-sw::after{
+  content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:var(--paper);border:1px solid var(--rule2);box-shadow:0 1px 2px rgba(50,35,15,.12);transition:transform .18s ease;
+}
+.hdr-google-sw-on::after{transform:translateX(18px);}
+.hdr-google-sw:disabled{cursor:not-allowed;opacity:.52;}
+
+.hdr-ws-btn{
+  width:32px;height:32px;border-radius:8px;font-weight:800;font-size:13px;position:relative;
+  border:1px solid var(--rule2);background:var(--paper);color:var(--ink2);cursor:pointer;line-height:1;
+  font-family:'DM Sans',sans-serif;
+  transition:border-color .25s ease,color .22s ease,background .22s ease,transform .35s cubic-bezier(.22,1,.36,1);
+}
+.hdr-ws-btn.on{background:rgba(26,104,53,.12);border-color:rgba(26,104,53,.35);color:#1A6835;}
+.hdr-ws-btn.ws-agent-soft{animation:hdrWsBreathe 3.4s cubic-bezier(.4,0,.2,1) infinite;}
+.hdr-ws-btn.ws-agent-intense{animation:hdrWsBreatheStrong 1.35s cubic-bezier(.35,.12,.35,1) infinite;}
+.hdr-ws-pip{
+  position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;
+  background:linear-gradient(142deg,#1A6835,#2EB56C);box-shadow:0 0 0 2px rgba(248,244,237,.98);
+  opacity:0;transform:scale(.4);transition:opacity .38s cubic-bezier(.22,1,.36,1),transform .42s cubic-bezier(.22,1,.36,1);
+}
+.hdr-ws-pip.vis{opacity:1;transform:scale(1);animation:wsPipLife 2.25s cubic-bezier(.4,0,.2,1) infinite;}
+@keyframes hdrWsBreathe{0%,100%{box-shadow:0 0 0 0 rgba(26,104,53,.04);border-color:rgba(26,104,53,.38)}42%{box-shadow:0 0 0 1px rgba(26,104,53,.07),0 0 16px rgba(26,104,53,.06);border-color:rgba(26,104,53,.54)}}
+@keyframes hdrWsBreatheStrong{0%,100%{box-shadow:0 0 0 0 rgba(26,104,53,.06);border-color:rgba(26,104,53,.54)}42%{box-shadow:0 0 0 2px rgba(26,104,53,.38),0 0 20px rgba(26,104,53,.26);border-color:rgba(26,104,53,.74);}}
+@keyframes wsPipLife{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
+
+.ws-dock-status{
+  font-size:10.5px;line-height:1.45;color:var(--ink2);display:flex;align-items:center;gap:8px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--rule);
+}
+.ws-dock-status .ws-mini-dots{display:inline-flex;gap:3px;}
+.ws-dock-status .ws-mini-dots i{width:4px;height:4px;border-radius:50%;background:#1A6835;opacity:.5;animation:wsMiniWave 1.2s ease-in-out infinite;}
+.ws-dock-status .ws-mini-dots i:nth-child(2){animation-delay:.22s;}
+.ws-dock-status .ws-mini-dots i:nth-child(3){animation-delay:.44s;}
+@keyframes wsMiniWave{0%,100%{opacity:.28;transform:translateY(0)}50%{opacity:1;transform:translateY(-2px)}}
+.ws-dock-muted{color:var(--ink3);}
+.ws-dock-strong{font-weight:600;color:var(--ink2);}
+.workspace-pop-status{
+  font-size:10.5px;color:var(--ink3);margin-top:-4px;margin-bottom:8px;line-height:1.42;padding:8px 9px;background:linear-gradient(180deg,rgba(26,104,53,.045),transparent);border-radius:8px;border:1px solid rgba(26,104,53,.07);
+}
+.workspace-pop-status .ws-pop-strong{font-weight:600;color:var(--ink2);display:block;margin-bottom:5px;font-size:11px;}
+
+.workspace-pop{
+  position:absolute;right:0;top:100%;margin-top:8px;z-index:10020;
+  width:min(320px,calc(100vw - 24px));
+  background:var(--page);border:1px solid var(--rule2);border-radius:12px;
+  box-shadow:0 14px 44px rgba(50,35,15,.14);padding:14px 14px 12px;text-align:left;
+}
+.workspace-pop-h{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);margin-bottom:10px;}
+.workspace-row{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink2);margin:6px 0;cursor:pointer;}
+.workspace-row input{accent-color:#1A6835;}
+.workspace-pop-note{font-size:11px;color:var(--ink3);line-height:1.45;margin:8px 0;}
+.workspace-pop-err{font-size:11.5px;color:var(--red);margin:4px 0;}
+.workspace-pop-hintmsg{font-size:11px;color:#6a4c00;line-height:1.45;margin:8px 0;padding:10px 12px;border-radius:9px;background:rgba(255,244,209,.94);border:1px solid rgba(198,154,92,.42);}
+.workspace-pop-ok{font-size:11px;color:#174a2d;line-height:1.45;margin:8px 0;padding:10px 12px;border-radius:9px;background:rgba(229,246,237,.94);border:1px solid rgba(74,157,117,.42);}
+.workspace-code{font-size:10px;background:var(--paper);padding:1px 5px;border-radius:4px;}
+.workspace-connect{width:100%;margin-top:8px;}
+.workspace-disconnect{width:100%;margin-top:6px;}
+.ws-dock{
+  position:fixed;right:14px;bottom:14px;z-index:9990;max-width:min(320px,calc(100vw - 28px));
+  background:var(--page);border:1px solid var(--rule2);border-radius:12px;
+  box-shadow:0 12px 36px rgba(50,35,15,.12);padding:10px 11px;max-height:min(40vh,320px);overflow:auto;font-size:11.5px;
+}
+.ws-dock-title{font-weight:700;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);margin-bottom:6px;}
+.ws-dock-section{display:flex;flex-direction:column;gap:6px;}
+.ws-dock-hint,.ws-dock-job{display:flex;align-items:center;flex-wrap:wrap;gap:6px;border-bottom:1px solid var(--rule);padding-bottom:6px;}
+.ws-dock-job:last-child{border-bottom:none;}
+.ws-hint-kind{text-transform:uppercase;font-size:9px;font-weight:700;color:#5E38A0;}
+.ws-hint-snip{flex:1;min-width:0;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ws-hint-btn{font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--rule2);background:var(--paper);cursor:pointer;}
+.ws-hint-dismiss{background:none;border:none;cursor:pointer;color:var(--ink3);font-size:13px;}
+.ws-job-status{font-size:9px;font-weight:700;text-transform:uppercase;color:var(--ink3);}
+.ws-job-running{color:#A85F00;}
+.ws-job-done{color:#1A6835;}
+.ws-job-failed{color:var(--red);}
+.ws-job-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ws-job-link{font-size:11px;}
+.ws-job-retry{font-size:10px;font-weight:600;padding:2px 6px;border-radius:5px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;font-family:inherit;}
+.ws-job-retry:hover{border-color:rgba(194,71,71,.42);}
+.ws-job-err{color:var(--red);font-size:10px;width:100%;white-space:pre-wrap;word-break:break-word;max-height:8em;overflow-y:auto;}
+.ws-modal-overlay{
+  position:fixed;inset:0;z-index:10040;background:rgba(30,22,12,.45);
+  display:flex;align-items:center;justify-content:center;padding:16px;
+}
+.ws-modal{
+  width:min(440px,100%);max-height:min(90vh,640px);overflow:auto;
+  background:var(--page);border:1px solid var(--rule2);border-radius:14px;
+  box-shadow:0 22px 56px rgba(0,0,0,.2);
+}
+.ws-modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--rule);}
+.ws-modal-title{font-weight:700;font-size:14px;}
+.ws-modal-body{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;}
+.ws-field{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--ink2);}
+.ws-field input,.ws-field textarea,.ws-field select{
+  font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--rule2);background:var(--paper);color:var(--ink);
+}
+.ws-modal-quote{font-size:11px;color:var(--ink3);border-left:3px solid rgba(94,56,160,.35);padding:6px 10px;background:var(--paper);border-radius:0 8px 8px 0;line-height:1.45;}
+.ws-modal-disc{font-size:11.5px;color:var(--ink2);line-height:1.5;}
+.ws-modal-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;}
+.ws-modal-send-err{margin:8px 0 0;line-height:1.35;}
+
+@media (prefers-reduced-motion: reduce){
+  .ws-agent-rail .ws-agent-rail-track{animation:none!important;opacity:.85;}
+  .hdr-ws-btn.ws-agent-soft,.hdr-ws-btn.ws-agent-intense{animation:none!important;}
+  .hdr-ws-pip.vis{animation:none!important;}
+  .ws-mini-dots i{animation:none!important;opacity:.75;}
+}
+
 ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:var(--rule2);border-radius:10px;}
 `;
 
@@ -2875,8 +3062,8 @@ export default function SunnyDNotes() {
   const [lectureQRefreshing, setLectureQRefreshing] = useState(false);
   const [lectureQGenerating, setLectureQGenerating] = useState(false); // auto-generating missing answer
   const [lectureQExpanding,  setLectureQExpanding]  = useState(false); // generating long expanded answer
-  // Note setup modal — null = hidden; pendingId = number means creating new note; null pendingId = editing existing
-  const [noteSetupModal, setNoteSetupModal] = useState(null); // { pendingId, subject, professor, goal }
+  // Note setup modal — hidden | { pendingId, subject, professor, goal, manualTitle? }; pendingId=null = editing metadata only
+  const [noteSetupModal, setNoteSetupModal] = useState(null);
   const [notedQIds, setNotedQIds] = useState(new Set()); // Q IDs added to notes
   const [lectureSecs, setLectureSecs] = useState(0); // session duration counter
   const lectureTimerRef = useRef(null);
@@ -2917,7 +3104,60 @@ export default function SunnyDNotes() {
   const podcastAnalyserRef = useRef(null);
   const lastPodcastSpeakerRef = useRef(null);
 
+  /* Google Workspace integration */
+  const [wsConnected, setWsConnected] = useState(false);
+  const [workspaceEnabled, setWorkspaceEnabled] = useState(() => {
+    try { return sessionStorage.getItem(LS_WS_MASTER) !== "0"; } catch { return true; }
+  });
+  const [wsCal, setWsCal] = useState(() => {
+    try { return sessionStorage.getItem(LS_WS_CAL) !== "0"; } catch { return true; }
+  });
+  const [wsAssign, setWsAssign] = useState(() => {
+    try { return sessionStorage.getItem(LS_WS_ASSIGN) !== "0"; } catch { return true; }
+  });
+  const [wsInvites, setWsInvites] = useState(() => {
+    try { return sessionStorage.getItem(LS_WS_INV) !== "0"; } catch { return true; }
+  });
+  const [workspaceInsertLink, setWorkspaceInsertLink] = useState(() => {
+    try { return sessionStorage.getItem(LS_WS_LINK) === "1"; } catch { return false; }
+  });
+  const workspaceInsertLinkRef = useRef(workspaceInsertLink);
+  workspaceInsertLinkRef.current = workspaceInsertLink;
+  const [workspaceExpand, setWorkspaceExpand] = useState(false);
+  const [workspaceOAuthErr, setWorkspaceOAuthErr] = useState("");
+  const [wsActivityOpen, setWsActivityOpen] = useState(false);
+  const [wsScanHintMsg, setWsScanHintMsg] = useState(null);
+  const [wsSuccessMsg, setWsSuccessMsg] = useState(null);
+
+  const [wsModal, setWsModal] = useState(null); // { kind: 'calendar'|'meeting'|'assignment', data: object }
+  const [wsHints, setWsHints] = useState([]);
+  const [workspaceJobs, setWorkspaceJobs] = useState([]);
+  /** User paused typing — workspace scan fires after delay */
+  const [wsScanScheduled, setWsScanScheduled] = useState(false);
+  /** LLM is extracting Workspace candidates from note text */
+  const [wsAnalyzing, setWsAnalyzing] = useState(false);
+  const workspaceBusy = useRef(false);
+  const lastWorkspacePlain = useRef({});
+
   const podcastTimeAnchors = useMemo(() => podcastTurnTimelineSec(podcastTurns), [podcastTurns]);
+
+  const wsBgJobsActive = useMemo(
+    () => workspaceJobs.some(j => j.status === "queued" || j.status === "running"),
+    [workspaceJobs],
+  );
+
+  /** Visual phase for Workspace rail — wait (debounced), extract (LLM), cloud (Docs/Gmail/Drive jobs) */
+  const wsRailPhase = wsAnalyzing ? "extract" : wsBgJobsActive ? "cloud" : wsScanScheduled ? "wait" : "idle";
+
+  const wsHdrWorkspaceTitle = useMemo(() => {
+    if (!workspaceEnabled || !wsConnected) return "Google Workspace";
+    if (wsAnalyzing) return "Workspace — analyzing note…";
+    if (wsBgJobsActive) return "Workspace — Google tasks in progress…";
+    if (wsScanScheduled) return "Workspace — will check after you pause typing…";
+    return "Google Workspace";
+  }, [workspaceEnabled, wsConnected, wsAnalyzing, wsBgJobsActive, wsScanScheduled]);
+
+  const wsAgentLive = !!(workspaceEnabled && wsConnected && (wsScanScheduled || wsAnalyzing || wsBgJobsActive));
 
   const syncPodcastSpeakerFromAudio = useCallback(() => {
     const el = podcastAudioRef.current;
@@ -3084,6 +3324,7 @@ export default function SunnyDNotes() {
     if (v !== "off") {
       delete lastScannedContent.current[activeId];
       clearTimeout(timers.current.s);
+      clearTimeout(timers.current.ws);
       timers.current.s = setTimeout(() => {
         generateSuggestions(activeId, notes.find(n => n.id === activeId)?.content || "", notes);
       }, 400);
@@ -3097,6 +3338,66 @@ export default function SunnyDNotes() {
   // setContent: sets editor content (and the editor's onChange updates notes via handleEditorChange)
   const setContent = v => { editorRef.current?.setEditorContent(v); };
   const setTitle   = v => setNotes(p => p.map(n => n.id === activeId ? { ...n, title:   v } : n));
+
+  const wsAi = useCallback(
+    async (system, user, max) => ai(llmProvider, apiKey, system, user, max),
+    [llmProvider, apiKey]
+  );
+
+  const wsAiRef = useRef(wsAi);
+  wsAiRef.current = wsAi;
+
+  const assignmentDrainHooksRef = useRef({ onJobDone: () => {}, onJobFailed: () => {} });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const tok = await completeAuthorizationFromUrlIfPresent();
+        if (tok && !cancelled) {
+          await persistNewTokens(tok);
+          setWsConnected(true);
+          setWorkspaceOAuthErr("");
+        }
+      } catch (e) {
+        if (!cancelled) setWorkspaceOAuthErr(String(e.message || e));
+      }
+      const ok = await isGoogleConnected().catch(() => false);
+      if (!cancelled) setWsConnected(ok);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceEnabled || !wsConnected) return undefined;
+    const load = () => listJobs(20).then(j => setWorkspaceJobs(j)).catch(() => {});
+    load();
+    const id = setInterval(load, 4000);
+    return () => clearInterval(id);
+  }, [workspaceEnabled, wsConnected]);
+
+  useEffect(() => {
+    if (!workspaceEnabled || !wsConnected || !apiKey?.trim()) return undefined;
+    void resumePendingAssignmentJobs(
+      (s, u, m) => wsAiRef.current(s, u, m),
+      assignmentDrainHooksRef.current,
+    );
+    return undefined;
+  }, [workspaceEnabled, wsConnected, apiKey]);
+
+  /** Clear Workspace debounce timer when switching notes — scan target must match visible note */
+  useEffect(() => {
+    clearTimeout(timers.current.ws);
+    setWsScanScheduled(false);
+    return undefined;
+  }, [activeId]);
+
+  useEffect(() => {
+    if (!workspaceEnabled || !wsConnected) {
+      clearTimeout(timers.current.ws);
+      setWsScanScheduled(false);
+    }
+  }, [workspaceEnabled, wsConnected]);
 
   const closePodcastModal = useCallback(() => {
     try { podcastAbortRef.current?.abort(); } catch {}
@@ -3537,7 +3838,7 @@ Rules (strict):
   // Open the setup modal for creating a new note (pendingId = future note id)
   function openNewNoteSetup() {
     const pendingId = Date.now();
-    setNoteSetupModal({ pendingId, subject: '', professor: '', goal: '' });
+    setNoteSetupModal({ pendingId, subject: "", professor: "", goal: "", manualTitle: undefined });
   }
 
   // Open for editing existing note metadata
@@ -3553,11 +3854,17 @@ Rules (strict):
   // Confirm: create new note (if pendingId) or update existing note metadata
   function confirmNoteSetup(skip = false) {
     if (!noteSetupModal) return;
-    const { pendingId, subject, professor, goal } = noteSetupModal;
+    const { pendingId, subject, professor, goal, manualTitle } = noteSetupModal;
+    const sTrim = (subject || "").trim();
     if (pendingId !== null) {
       // Creating a new note
-      const meta = skip ? {} : { subject: subject.trim(), professor: professor.trim(), goal: goal.trim() };
-      const newNote = { id: pendingId, title: 'Untitled', content: '', createdAt: Date.now(), ...meta };
+      const meta = skip ? {} : { subject: sTrim, professor: professor.trim(), goal: goal.trim() };
+      const titleResolved = skip
+        ? "Untitled"
+        : manualTitle === undefined
+          ? sTrim || "Untitled"
+          : (manualTitle || "").trim() || sTrim || "Untitled";
+      const newNote = { id: pendingId, title: titleResolved, content: "", createdAt: Date.now(), ...meta };
       setNotes(p => [...p, newNote]);
       setActiveId(pendingId);
       setTimeout(() => document.querySelector('.title-inp')?.focus(), 80);
@@ -4255,6 +4562,91 @@ ${focusNew}`,
     } finally { setBusy(false); setStatus(""); }
   }
 
+  /* ── Google Workspace: scan note for calendar / assignments / invites ── */
+  async function runWorkspaceScan(noteId, plainText, metaNote) {
+    if (!workspaceEnabled || workspaceBusy.current) return;
+    if (!wsConnected || !apiKey?.trim()) return;
+    if (!getGoogleClientId()) return;
+    if (plainText.length < 100) return;
+    workspaceBusy.current = true;
+    setWsAnalyzing(true);
+    setWsScanHintMsg(null);
+    setWsSuccessMsg(null);
+    try {
+      const jd = await listJobs(120).catch(() => []);
+      const ledger = buildWorkspaceLedgerSnippet(jd);
+      const parsed = await analyzeWorkspaceContent(
+        wsAi,
+        metaNote?.title || "Untitled",
+        plainText,
+        noteMetaBlock(metaNote),
+        ledger,
+      );
+
+      /** @type {Array<{ id: string, kind: string, data: object }>} */
+      const batch = [];
+      let skippedDueToQuote = false;
+
+      async function maybePush(kind, data, iso) {
+        if (!data || (data.confidence ?? 0) < 0.85) return;
+        const q = (data.sourceQuote || "").trim();
+        if (q.length < 10) return;
+        if (!plainTextMatchesSourceQuote(plainText, q)) {
+          skippedDueToQuote = true;
+          return;
+        }
+        const ik = idemKey(kind, q, iso || data.startIso || "");
+        if (await hasIdempotency(ik)) return;
+        batch.push({ id: ik, kind, data: { ...data, _idemKey: ik } });
+      }
+
+      if (wsInvites && parsed.meeting?.confidence >= 0.85) {
+        await maybePush("meeting", parsed.meeting, parsed.meeting?.startIso);
+      }
+
+      if (wsCal && parsed.calendar?.confidence >= 0.85) {
+        await maybePush("calendar", parsed.calendar, parsed.calendar?.startIso);
+      }
+
+      if (wsAssign && parsed.assignment?.confidence >= 0.85) {
+        const a = parsed.assignment;
+        const dt = ["doc", "sheet", "email_draft"].includes(a.deliverableType) ? a.deliverableType : "doc";
+        const enriched = {
+          ...a,
+          deliverableType: dt,
+        };
+        await maybePush("assignment", enriched, a.dueIso);
+      }
+
+      lastWorkspacePlain.current[noteId] = plainText;
+
+      if (!batch.length) {
+        if (skippedDueToQuote) {
+          setWsScanHintMsg(
+            "Workspace drafted a calendar/meeting/draft suggestion, but the model’s quoted line didn’t match your saved note text. Try one plain sentence with the date and time (e.g. “Exam May 15 2026 2pm”), pause ~10s, or check G toggles.",
+          );
+        }
+        return;
+      }
+      setWsHints(prev => {
+        const ids = new Set(prev.map(h => h.id));
+        const add = [];
+        for (const b of batch) {
+          if (!ids.has(b.id)) {
+            ids.add(b.id);
+            add.push(b);
+          }
+        }
+        return add.length ? [...prev, ...add] : prev;
+      });
+    } catch (e) {
+      console.error("workspace scan:", e);
+    } finally {
+      workspaceBusy.current = false;
+      setWsAnalyzing(false);
+    }
+  }
+
   /* ── Ghost completion: only when mid-thought, never after a complete sentence ── */
   async function runGhost(text, cur) {
     if (ghostBusy.current) return;
@@ -4288,6 +4680,10 @@ If the fragment could already be a complete sentence (they may have just forgott
     setGhost(null); setGhostThinking(false);
     clearTimeout(timers.current.t); clearTimeout(timers.current.f);
     clearTimeout(timers.current.s);
+    clearTimeout(timers.current.ws);
+    setWsScanScheduled(false);
+    setWsScanHintMsg(null);
+    setWsSuccessMsg(null);
 
     // Only remove suggestions whose textRef is gone; keep lecture suggestions with no textRef
     const removedIds = new Set();
@@ -4316,7 +4712,17 @@ If the fragment could already be a complete sentence (they may have just forgott
       timers.current.f = setTimeout(() => runFactCheck(text), 5500);
       timers.current.s = setTimeout(() => generateSuggestions(snapId, text, snapNotes), 7000);
     }
-  }, [activeId, dockedCard, notes, suggestionsOn]);
+    if (workspaceEnabled && wsConnected && apiKey?.trim() && getGoogleClientId()) {
+      timers.current.ws = setTimeout(() => {
+        void (async () => {
+          setWsScanScheduled(false);
+          const metaNote = snapNotes.find(n => n.id === snapId);
+          await runWorkspaceScan(snapId, text, metaNote || note);
+        })();
+      }, 10000);
+      if (text.trim().length >= 100) setWsScanScheduled(true);
+    }
+  }, [activeId, dockedCard, notes, suggestionsOn, workspaceEnabled, wsConnected, apiKey, note, wsCal, wsAssign, wsInvites]);
 
   const handleKeyDown = useCallback(e => {
     if (e.key === "Tab" && ghost) {
@@ -4325,6 +4731,8 @@ If the fragment could already be a complete sentence (they may have just forgott
       setGhost(null);
       clearTimeout(timers.current.t); clearTimeout(timers.current.f);
       clearTimeout(timers.current.s);
+      clearTimeout(timers.current.ws);
+      setWsScanScheduled(false);
     } else if (e.key === "Escape" && ghost) {
       e.preventDefault();
       setGhost(null);
@@ -4357,7 +4765,8 @@ If the fragment could already be a complete sentence (they may have just forgott
     busyWithSelAction.current = true;
     clearTimeout(timers.current.s);
     clearTimeout(timers.current.f);
-    const { text: t, start, end, x, y, below } = selMenu;
+    clearTimeout(timers.current.ws);
+    setWsScanScheduled(false);
     const noteTitle = note?.title || "Untitled";
     const ctxBefore = content.slice(Math.max(0, start - 300), start);
     const ctxAfter  = content.slice(end, Math.min(content.length, end + 300));
@@ -4461,6 +4870,8 @@ Context after selection:
         }
         clearTimeout(timers.current.f);
         clearTimeout(timers.current.s);
+        clearTimeout(timers.current.ws);
+        setWsScanScheduled(false);
         setTimeout(() => runFactCheck(editorRef.current?.getEditorContent() || content), 1500);
         setTimeout(() => generateSuggestions(activeId, editorRef.current?.getEditorContent() || content, notes), 2500);
       }
@@ -4558,7 +4969,8 @@ Return the rewritten passage only:`;
     if (!selRes) return;
     clearTimeout(timers.current.s);
     clearTimeout(timers.current.f);
-    const { original, text, op } = selRes;
+    clearTimeout(timers.current.ws);
+    setWsScanScheduled(false);
     const html = mdToHtml(text);
     // Use Tiptap surgical methods — never slice plain-text (that destroys HTML formatting)
     if (op === "replace") {
@@ -4953,12 +5365,183 @@ Return the rewritten passage only:`;
     { key: "explain",   icon: "◉", label: "Explain"   },
   ];
 
+  const isEmail = s => typeof s === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
+
+  const appendDraftLinkToNoteFor = (noteId, href, title) => {
+    if (!workspaceInsertLinkRef.current || !noteId) return;
+    const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const snippet = `<p><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">Draft: ${esc(title)}</a></p>`;
+    setNotes(p => p.map(n => (n.id === noteId ? { ...n, content: (n.content || "") + snippet } : n)));
+  };
+
+  async function finalizeAssignmentJobUI(doneJob, noteIdHint) {
+    try {
+      const j = doneJob ?? null;
+      const href = j?.webViewLink;
+      if (href && workspaceInsertLinkRef.current && noteIdHint) {
+        appendDraftLinkToNoteFor(noteIdHint, href, j.title || "Draft");
+      }
+      setWorkspaceJobs(await listJobs(20));
+    } catch {
+      void listJobs(20).then(setWorkspaceJobs);
+    }
+  }
+
+  assignmentDrainHooksRef.current = {
+    onJobDone: ({ job, jobMeta }) => void finalizeAssignmentJobUI(job, jobMeta?.noteId),
+    onJobFailed: () => void listJobs(20).then(setWorkspaceJobs),
+  };
+
+  async function retryWorkspaceAssignmentJob(jobId) {
+    const prev = await getJob(jobId);
+    if (!prev || prev.type !== "assignment") return;
+    await saveJob({ ...prev, status: "queued", step: "Queued…", error: undefined });
+    setWsActivityOpen(true);
+    setWorkspaceOAuthErr("");
+    void resumePendingAssignmentJobs(
+      (s, u, m) => wsAiRef.current(s, u, m),
+      assignmentDrainHooksRef.current,
+    );
+    void listJobs(20).then(setWorkspaceJobs).catch(() => {});
+  }
+
+
+  async function submitWorkspaceModal(form) {
+    if (!form) return;
+    setWorkspaceOAuthErr("");
+    setWsSuccessMsg(null);
+    try {
+      if (form.kind === "calendar" || form.kind === "meeting") {
+        const ev = normalizeCalendarDates({ ...form.data });
+        const attendees = (form.kind === "meeting" ? String(ev.attendeesStr || "") : "")
+          .split(/[,\s]+/)
+          .map(s => s.trim())
+          .filter(isEmail);
+        if (form.kind === "meeting" && attendees.length === 0) {
+          setWorkspaceOAuthErr("Add at least one attendee email to send calendar invites.");
+          return;
+        }
+        const st = String(ev.startIso || "").trim();
+        const en = String(ev.endIso || "").trim();
+        if (!st) {
+          setWorkspaceOAuthErr("Add a start date and time.");
+          return;
+        }
+        if (!en) {
+          setWorkspaceOAuthErr(
+            "Could not derive an end time. Use a parseable start (e.g. 2026-01-10T16:00:00) or enter End explicitly."
+          );
+          return;
+        }
+        const sendUpdates = form.kind === "meeting" ? "all" : "none";
+        const created = await insertCalendarEvent(
+          {
+            summary: ev.summary,
+            description: ev.description || "",
+            start: { dateTime: ev.startIso, timeZone: ev.timeZone || "UTC" },
+            end: { dateTime: ev.endIso, timeZone: ev.timeZone || "UTC" },
+            ...(attendees.length ? { attendees: attendees.map(email => ({ email })) } : {}),
+          },
+          sendUpdates,
+        );
+        const hintKey =
+          typeof form?.data?._idemKey === "string" && form.data._idemKey.length > 0
+            ? form.data._idemKey
+            : typeof ev?._idemKey === "string" && ev._idemKey.length > 0
+              ? ev._idemKey
+              : null;
+
+        await saveJob({
+          jobId: `wscal_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+          type: form.kind === "meeting" ? "meeting" : "calendar",
+          status: "done",
+          createdAt: Date.now(),
+          noteId: activeId,
+          title:
+            String(ev.summary || "").trim().slice(0, 200) ||
+            (form.kind === "meeting" ? "Meeting" : "Calendar"),
+          webViewLink: created.htmlLink || "https://calendar.google.com/calendar",
+          payload: { modalKind: form.kind, googleEventId: created.id ?? null },
+          step: "",
+        });
+        if (hintKey) {
+          await setIdempotency(hintKey).catch(() => {});
+          setWsHints(h => h.filter(x => x.id !== hintKey));
+        }
+        try {
+          setWorkspaceJobs(await listJobs(30));
+        } catch {
+          void listJobs(30).then(setWorkspaceJobs).catch(() => {});
+        }
+        setWsModal(null);
+        setWsSuccessMsg(
+          form.kind === "meeting"
+            ? "Meeting invite sent — open Agents in the toolbar to open the Calendar event."
+            : "Calendar event saved — open Agents in the toolbar to open it in Google Calendar.",
+        );
+        return;
+      }
+      if (form.kind === "assignment") {
+        const payload = form.data;
+        const jobId = `wsj_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+        const noteSnap = content.slice(0, 12000);
+        await saveJob({
+          jobId,
+          type: "assignment",
+          status: "queued",
+          createdAt: Date.now(),
+          noteId: activeId,
+          title: payload.title,
+          payload,
+          noteContext: noteSnap,
+          step: "Queued…",
+        });
+        const idKey = payload._idemKey;
+        setWsHints(h => h.filter(x => x.id !== idKey));
+        setWsModal(null);
+        void resumePendingAssignmentJobs(
+          (s, u, m) => wsAiRef.current(s, u, m),
+          assignmentDrainHooksRef.current,
+        ).then(async () => {
+          setWorkspaceJobs(await listJobs(20));
+          try {
+            const failed = await getJob(jobId);
+            if (failed?.status === "failed" && failed?.error) setWorkspaceOAuthErr(String(failed.error));
+          } catch {}
+        }).catch(() => {});
+      }
+    } catch (e) {
+      setWorkspaceOAuthErr(String(e.message || e));
+    }
+  }
+
+  async function testGoogleCalendarMinimal() {
+    setWorkspaceOAuthErr("");
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      const start = new Date();
+      start.setMinutes(0, 0, 0);
+      start.setHours(start.getHours() + 1);
+      const end = new Date(start.getTime() + 3600000);
+      await insertCalendarEvent(
+        {
+          summary: "SunnyD — Google connection test",
+          start: { dateTime: start.toISOString(), timeZone: tz },
+          end: { dateTime: end.toISOString(), timeZone: tz },
+        },
+        "none",
+      );
+    } catch (e) {
+      setWorkspaceOAuthErr(String(e.message || e));
+    }
+  }
+
   if (!apiKey) return <><style>{CSS}</style><KeyScreen onSave={saveKeys} /></>;
 
   return (
     <>
       <style>{CSS}</style>
-      <div className="app" onClick={() => { setSelMenu(null); setExportOpen(false); }}>
+      <div className="app" onClick={() => { setSelMenu(null); setExportOpen(false); setWorkspaceExpand(false); setWsActivityOpen(false); }}>
 
         {/* Header */}
         <header className="hdr">
@@ -4989,6 +5572,37 @@ Return the rewritten passage only:`;
               </>
             )}
             <span className="hdr-wc">{wc} words</span>
+            {getGoogleClientId() && (
+              <span
+                className="hdr-google-toggle"
+                title={
+                  workspaceEnabled
+                    ? "Google Calendar, Workspace drafts & meeting helpers are enabled (matches Enable automation under G)"
+                    : "Turn on to scan notes for calendar, drafts & meetings after you connect Google"
+                }
+                onClick={e => e.stopPropagation()}
+              >
+                <span className="hdr-google-toggle-lbl" id="hdr-google-toggle-lbl">Google</span>
+                <button
+                  type="button"
+                  id="hdr-google-switch"
+                  className={`hdr-google-sw${workspaceEnabled ? " hdr-google-sw-on" : ""}`}
+                  role="switch"
+                  aria-checked={workspaceEnabled}
+                  aria-labelledby="hdr-google-toggle-lbl"
+                  onClick={() => {
+                    const v = !workspaceEnabled;
+                    clearTimeout(timers.current.ws);
+                    setWsScanScheduled(false);
+                    setWsScanHintMsg(null);
+                    setWsSuccessMsg(null);
+                    setWorkspaceEnabled(v);
+                    try { sessionStorage.setItem(LS_WS_MASTER, v ? "1" : "0"); } catch {}
+                    if (!v) setWorkspaceExpand(false);
+                  }}
+                />
+              </span>
+            )}
             <button
               type="button"
               className="hdr-podcast-btn"
@@ -4996,6 +5610,7 @@ Return the rewritten passage only:`;
               onClick={e => {
                 e.stopPropagation();
                 setExportOpen(false);
+                setWorkspaceExpand(false);
                 setPodcastMinimized(false);
                 setPodcastOpen(true);
                 try {
@@ -5005,6 +5620,63 @@ Return the rewritten passage only:`;
             >
               ☀️ SunnyD Cast
             </button>
+            {workspaceEnabled && getGoogleClientId() && (
+              <div className="hdr-ws-act-wrap" onClick={e => e.stopPropagation()}>
+                <button
+                  type="button"
+                  className="hdr-ws-act-btn"
+                  title="Workspace drafts & agent activity"
+                  onClick={() => {
+                    setExportOpen(false);
+                    setWsActivityOpen(o => !o);
+                  }}
+                >
+                  Agents
+                </button>
+                {wsActivityOpen && (
+                  <div className="hdr-ws-act-panel" role="region" aria-label="Workspace agents">
+                    <div className="hdr-ws-act-ph">Workspace drafts</div>
+                    {workspaceJobs.length === 0 && (
+                      <div className="hdr-ws-act-empty">No draft jobs yet. Create drafts from Workspace hints.</div>
+                    )}
+                    <ul className="hdr-ws-act-list">
+                      {workspaceJobs.slice(0, 24).map(j => (
+                        <li key={j.jobId} className="hdr-ws-act-row">
+                          <span className={`hdr-ws-act-st hdr-ws-st-${String(j.status || "").replace(/\s+/g, "-")}`}>
+                            {j.status || "—"}
+                          </span>
+                          <span
+                            className="hdr-ws-act-title"
+                            title={String(j.step || j.title || j.jobId || "")}
+                          >
+                            {String(j.step || j.title || j.jobId || "")
+                              .slice(0, 70)}
+                            {(String(j.step || j.title || j.jobId || "").length > 70 ? "…" : "")}
+                          </span>
+                          {j.webViewLink ? (
+                            <a className="hdr-ws-act-link" href={j.webViewLink} target="_blank" rel="noopener noreferrer">
+                              Open
+                            </a>
+                          ) : (
+                            <span />
+                          )}
+                          {(j.status === "failed") && (
+                            <button type="button" className="hdr-ws-act-retry" onClick={() => retryWorkspaceAssignmentJob(j.jobId)}>
+                              Retry
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                    {workspaceJobs.some(j => j.error) && (
+                      <p className="hdr-ws-act-hint">
+                        Toggle &ldquo;Insert draft link into note&rdquo; under G to paste links automatically when a job finishes.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="export-wrap" title="Export notes" onClick={e => e.stopPropagation()}>
               <button className="export-btn" onClick={() => setExportOpen(p => !p)}>
                 ↓ Export
@@ -5025,6 +5697,164 @@ Return the rewritten passage only:`;
                       <span className="export-item-desc">Export all notes in one file</span>
                     </span>
                   </button>
+                </div>
+              )}
+            </div>
+            <div
+              className="workspace-wrap hdr-ws-rail-pos"
+              title={wsHdrWorkspaceTitle}
+              onClick={e => e.stopPropagation()}
+            >
+              <div
+                className={`ws-agent-rail${wsAgentLive ? " on" : ""}`}
+                data-phase={wsRailPhase}
+                role="presentation"
+                aria-hidden
+              >
+                <div className="ws-agent-rail-track" />
+              </div>
+              <button
+                type="button"
+                className={`hdr-ws-btn${workspaceEnabled ? " on" : ""}${
+                  wsAnalyzing ? " ws-agent-intense" : wsAgentLive ? " ws-agent-soft" : ""
+                }`}
+                onClick={() => {
+                setWorkspaceExpand(o => !o);
+                setExportOpen(false);
+                setWsActivityOpen(false);
+              }}
+                aria-busy={wsAnalyzing ? "true" : "false"}
+              >
+                G
+                <span className={`hdr-ws-pip${wsAgentLive ? " vis" : ""}`} aria-hidden />
+              </button>
+              {workspaceExpand && (
+                <div className="workspace-pop">
+                  <div className="workspace-pop-h">Google Workspace</div>
+                  {!getGoogleClientId() && (
+                    <p className="workspace-pop-note">Set <code className="workspace-code">VITE_GOOGLE_CLIENT_ID</code> when building (see README).</p>
+                  )}
+                  {workspaceOAuthErr && <p className="workspace-pop-err">{workspaceOAuthErr}</p>}
+                  {wsScanHintMsg && !workspaceOAuthErr && (
+                    <p className="workspace-pop-note workspace-pop-hintmsg">{wsScanHintMsg}</p>
+                  )}
+                  {wsSuccessMsg && !workspaceOAuthErr && (
+                    <p className="workspace-pop-note workspace-pop-ok">{wsSuccessMsg}</p>
+                  )}
+                  {workspaceEnabled &&
+                    wsConnected &&
+                    wsAgentLive &&
+                    (wsAnalyzing ? (
+                      <div className="workspace-pop-status" aria-live="polite">
+                        <strong className="ws-pop-strong">Analyzing note…</strong>
+                        Matching dates, drafts, and meeting hints to Workspace — stays on-device until you approve.
+                      </div>
+                    ) : wsScanScheduled ? (
+                      <div className="workspace-pop-status" aria-live="polite">
+                        <strong className="ws-pop-strong">Watching this note.</strong>
+                        After you pause typing, SunnyD scans for Workspace actions (runs in ~10s).
+                      </div>
+                    ) : wsBgJobsActive ? (
+                      <div className="workspace-pop-status" aria-live="polite">
+                        <strong className="ws-pop-strong">Google Workspace is busy.</strong>
+                        Drafts and files finish in the background — keep this tab open.
+                      </div>
+                    ) : null)}
+                  <label className="workspace-row">
+                    <input
+                      type="checkbox"
+                      checked={workspaceEnabled}
+                      onChange={e => {
+                        const v = e.target.checked;
+                        setWorkspaceEnabled(v);
+                        try { sessionStorage.setItem(LS_WS_MASTER, v ? "1" : "0"); } catch {}
+                      }}
+                    />
+                    <span>Enable automation</span>
+                  </label>
+                  <label className="workspace-row">
+                    <input
+                      type="checkbox"
+                      checked={wsCal}
+                      onChange={e => {
+                        const v = e.target.checked;
+                        setWsCal(v);
+                        try { sessionStorage.setItem(LS_WS_CAL, v ? "1" : "0"); } catch {}
+                      }}
+                    />
+                    <span>Date &amp; time → Calendar</span>
+                  </label>
+                  <label className="workspace-row">
+                    <input
+                      type="checkbox"
+                      checked={wsAssign}
+                      onChange={e => {
+                        const v = e.target.checked;
+                        setWsAssign(v);
+                        try { sessionStorage.setItem(LS_WS_ASSIGN, v ? "1" : "0"); } catch {}
+                      }}
+                    />
+                    <span>Assignments → Docs / Sheets / Gmail draft</span>
+                  </label>
+                  <label className="workspace-row">
+                    <input
+                      type="checkbox"
+                      checked={wsInvites}
+                      onChange={e => {
+                        const v = e.target.checked;
+                        setWsInvites(v);
+                        try { sessionStorage.setItem(LS_WS_INV, v ? "1" : "0"); } catch {}
+                      }}
+                    />
+                    <span>Meetings → Invites with emails in notes</span>
+                  </label>
+                  <label className="workspace-row">
+                    <input
+                      type="checkbox"
+                      checked={workspaceInsertLink}
+                      onChange={e => {
+                        const v = e.target.checked;
+                        setWorkspaceInsertLink(v);
+                        try { sessionStorage.setItem(LS_WS_LINK, v ? "1" : "0"); } catch {}
+                      }}
+                    />
+                    <span>Append link to note when a draft is ready</span>
+                  </label>
+                  <p className="workspace-pop-note">
+                    Long drafts need this tab to stay open. Tokens stay in IndexedDB until you disconnect.
+                  </p>
+                  {!wsConnected ? (
+                    <button
+                      type="button"
+                      className="btn-fill workspace-connect"
+                      disabled={!getGoogleClientId()}
+                      onClick={() => beginGoogleAuthorization()}
+                    >
+                      Connect Google
+                    </button>
+                  ) : (
+                    <>
+                      <button type="button" className="btn-out workspace-connect" onClick={testGoogleCalendarMinimal}>
+                        Test Calendar API
+                      </button>
+                      <button
+                        type="button"
+                        className="workspace-disconnect btn-out"
+                        onClick={async () => {
+                          await disconnectGoogle();
+                          setWsConnected(false);
+                          setWsHints([]);
+                          setWorkspaceJobs([]);
+                          setWorkspaceOAuthErr("");
+                          setWsSuccessMsg(null);
+                          setWsScanHintMsg(null);
+                          setWsScanHintMsg(null);
+                        }}
+                      >
+                        Disconnect Google
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -5591,6 +6421,280 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
           );
         })()}
 
+        {/* Google Workspace — verify modal */}
+        {wsModal && (
+          <div className="ws-modal-overlay" role="presentation" onClick={() => setWsModal(null)}>
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="ws-modal"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="ws-modal-hdr">
+                <span className="ws-modal-title">
+                  {{ calendar: "Calendar event", meeting: "Meeting invite", assignment: "Assignment draft" }[wsModal.kind] || "Workspace"}
+                </span>
+                <button type="button" className="x-btn" onClick={() => setWsModal(null)} aria-label="Close">
+                  ×
+                </button>
+              </div>
+              {(wsModal.kind === "calendar" || wsModal.kind === "meeting") && (
+                <div className="ws-modal-body">
+                  <label className="ws-field">
+                    <span>Summary</span>
+                    <input
+                      value={wsModal.data.summary || ""}
+                      onChange={e =>
+                        setWsModal(m => ({
+                          ...m,
+                          data: { ...m.data, summary: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="ws-field">
+                    <span>Start (ISO datetime)</span>
+                    <input
+                      value={wsModal.data.startIso || ""}
+                      onChange={e =>
+                        setWsModal(m => ({
+                          ...m,
+                          data: { ...m.data, startIso: e.target.value },
+                        }))
+                      }
+                      onBlur={() =>
+                        setWsModal(m =>
+                          m && (m.kind === "calendar" || m.kind === "meeting")
+                            ? { ...m, data: normalizeCalendarDates(m.data) }
+                            : m
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="ws-field">
+                    <span>End (ISO datetime)</span>
+                    <input
+                      placeholder="Defaults to start + 1 hour if empty when you click Send"
+                      value={wsModal.data.endIso || ""}
+                      onChange={e =>
+                        setWsModal(m => ({
+                          ...m,
+                          data: { ...m.data, endIso: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="ws-field">
+                    <span>Time zone</span>
+                    <input
+                      placeholder="America/New_York"
+                      value={wsModal.data.timeZone || ""}
+                      onChange={e =>
+                        setWsModal(m => ({
+                          ...m,
+                          data: { ...m.data, timeZone: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  {wsModal.kind === "meeting" && (
+                    <label className="ws-field">
+                      <span>Attendee emails (comma-separated)</span>
+                      <input
+                        value={wsModal.data.attendeesStr || ""}
+                        onChange={e =>
+                          setWsModal(m => ({
+                            ...m,
+                            data: { ...m.data, attendeesStr: e.target.value },
+                          }))
+                        }
+                      />
+                    </label>
+                  )}
+                  <label className="ws-field">
+                    <span>Description</span>
+                    <textarea
+                      rows={3}
+                      value={wsModal.data.description || ""}
+                      onChange={e =>
+                        setWsModal(m => ({
+                          ...m,
+                          data: { ...m.data, description: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <p className="ws-modal-quote">&ldquo;{String(wsModal.data.sourceQuote || "").slice(0, 220)}{String(wsModal.data.sourceQuote || "").length > 220 ? "…" : ""}&rdquo;</p>
+                  {workspaceOAuthErr && (
+                    <p className="workspace-pop-err ws-modal-send-err">{workspaceOAuthErr}</p>
+                  )}
+                  <div className="ws-modal-actions">
+                    <button type="button" className="btn-fill" onClick={() => submitWorkspaceModal(wsModal)}>
+                      {wsModal.kind === "meeting" ? "Send invites" : "Add to Calendar"}
+                    </button>
+                    <button type="button" className="btn-out" onClick={() => setWsModal(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+              {wsModal.kind === "assignment" && (
+                <div className="ws-modal-body">
+                  <p className="ws-modal-disc">
+                    SunnyD drafts in your Google account for your review. You are responsible for accuracy and for following your institution&apos;s rules.
+                  </p>
+                  <label className="ws-field">
+                    <span>Title</span>
+                    <input
+                      value={wsModal.data.title || ""}
+                      onChange={e =>
+                        setWsModal(m => ({
+                          ...m,
+                          data: { ...m.data, title: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="ws-field">
+                    <span>Type</span>
+                    <select
+                      value={wsModal.data.deliverableType || "doc"}
+                      onChange={e =>
+                        setWsModal(m => ({
+                          ...m,
+                          data: { ...m.data, deliverableType: e.target.value },
+                        }))
+                      }
+                    >
+                      <option value="doc">Google Doc</option>
+                      <option value="sheet">Google Sheet</option>
+                      <option value="email_draft">Gmail draft</option>
+                    </select>
+                  </label>
+                  {wsModal.data.deliverableType === "email_draft" && (
+                    <label className="ws-field">
+                      <span>To</span>
+                      <input
+                        placeholder="teacher@school.edu"
+                        value={wsModal.data.emailTo || ""}
+                        onChange={e =>
+                          setWsModal(m => ({
+                            ...m,
+                            data: { ...m.data, emailTo: e.target.value },
+                          }))
+                        }
+                      />
+                    </label>
+                  )}
+                  <label className="ws-field">
+                    <span>Instructions</span>
+                    <textarea
+                      rows={4}
+                      value={wsModal.data.instructionsSummary || ""}
+                      onChange={e =>
+                        setWsModal(m => ({
+                          ...m,
+                          data: { ...m.data, instructionsSummary: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <p className="ws-modal-quote">&ldquo;{String(wsModal.data.sourceQuote || "").slice(0, 220)}{String(wsModal.data.sourceQuote || "").length > 220 ? "…" : ""}&rdquo;</p>
+                  <div className="ws-modal-actions">
+                    <button type="button" className="btn-fill" onClick={() => submitWorkspaceModal(wsModal)}>
+                      Create draft
+                    </button>
+                    <button type="button" className="btn-out" onClick={() => setWsModal(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {workspaceEnabled && wsConnected &&
+          (wsHints.length > 0 || workspaceJobs.length > 0 || wsAnalyzing || wsScanScheduled || wsBgJobsActive) && (
+          <div className="ws-dock">
+            <div className="ws-dock-title">Workspace</div>
+            {(wsAnalyzing || wsScanScheduled || wsBgJobsActive) && (
+              <div className="ws-dock-status">
+                <span className="ws-mini-dots" aria-hidden><i/><i/><i/></span>
+                <span>
+                  {wsAnalyzing && (
+                    <><span className="ws-dock-strong">Analyzing note</span><span className="ws-dock-muted"> — matching dates & drafts to your wording</span></>
+                  )}
+                  {!wsAnalyzing && wsScanScheduled && (
+                    <><span className="ws-dock-strong">Ready to check</span><span className="ws-dock-muted"> — scans ~10s after you pause typing (100+ words)</span></>
+                  )}
+                  {!wsAnalyzing && !wsScanScheduled && wsBgJobsActive && (
+                    <><span className="ws-dock-strong">In progress</span><span className="ws-dock-muted"> — SunnyD ↔ Google Workspace</span></>
+                  )}
+                </span>
+              </div>
+            )}
+            {wsHints.length > 0 && (
+              <div className="ws-dock-section">
+                {wsHints.map(h => (
+                  <div key={h.id} className="ws-dock-hint">
+                    <span className="ws-hint-kind">{h.kind}</span>
+                    <span className="ws-hint-snip">{String(h.data?.summary || h.data?.title || "item").slice(0, 36)}…</span>
+                    <button
+                      type="button"
+                      className="ws-hint-btn"
+                      onClick={() => {
+                        setWorkspaceOAuthErr("");
+                        setWsModal({
+                          kind:
+                            h.kind === "assignment" ? "assignment" : h.kind === "meeting" ? "meeting" : "calendar",
+                          data:
+                            h.kind === "assignment"
+                              ? { ...h.data }
+                              : normalizeCalendarDates({
+                                  ...h.data,
+                                  attendeesStr: (h.data.attendeesEmails || []).join(", ") || h.data.attendeesStr || "",
+                                }),
+                        });
+                      }}
+                    >
+                      Verify
+                    </button>
+                    <button type="button" className="ws-hint-dismiss" onClick={() => setWsHints(x => x.filter(y => y.id !== h.id))}>
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {workspaceJobs.length > 0 && (
+              <div className="ws-dock-section">
+                {workspaceJobs.slice(0, 12).map(j => (
+                  <div key={j.jobId} className="ws-dock-job">
+                    <span className={`ws-job-status ws-job-${String(j.status || "").replace(/\s+/g, "-")}`}>{j.status}</span>
+                    <span className="ws-job-title">{j.step || j.title || j.type || "job"}</span>
+                    {j.webViewLink && (
+                      <a href={j.webViewLink} target="_blank" rel="noopener noreferrer" className="ws-job-link">
+                        Open
+                      </a>
+                    )}
+                    {(j.status === "failed") && (
+                      <button type="button" className="ws-job-retry" onClick={() => retryWorkspaceAssignmentJob(j.jobId)}>
+                        Retry
+                      </button>
+                    )}
+                    {j.error && (
+                      <span className="ws-job-err" title={j.error}>
+                        {j.error.length > 900 ? `${j.error.slice(0, 900)}…` : j.error}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {podcastOpen && createPortal(
           <div className={podcastMinimized ? "podcast-shell podcast-shell--minimized" : "podcast-shell"}>
             <div
@@ -5934,6 +7038,31 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                     onKeyDown={e => e.key === "Enter" && confirmNoteSetup()}
                   />
                 </div>
+                {noteSetupModal.pendingId !== null && (
+                  <div className="note-setup-field">
+                    <label className="note-setup-label">Note title</label>
+                    <input
+                      className="note-setup-input"
+                      placeholder="Matches Subject until you customize it"
+                      value={
+                        noteSetupModal.manualTitle !== undefined
+                          ? noteSetupModal.manualTitle
+                          : noteSetupModal.subject
+                      }
+                      onChange={e =>
+                        setNoteSetupModal(p =>
+                          p?.pendingId == null ? p : { ...p, manualTitle: e.target.value },
+                        )
+                      }
+                      onKeyDown={e => e.key === "Enter" && confirmNoteSetup()}
+                    />
+                    {noteSetupModal.manualTitle === undefined ? (
+                      <p className="note-setup-hint">Auto-filled from Subject / Course — edit if you prefer a different title.</p>
+                    ) : (
+                      <p className="note-setup-hint">Customize above; Subject can differ from how the note is named.</p>
+                    )}
+                  </div>
+                )}
                 <div className="note-setup-field">
                   <label className="note-setup-label">Professor / Instructor</label>
                   <input

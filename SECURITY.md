@@ -33,6 +33,14 @@ SunnyD Notes is a fully client-side application. No backend server processes or 
 - Optionally, you can save notes to a **local JSON file** on your disk using the File System Access API (Chrome/Edge only). The app writes to whatever file you choose; no copy is sent anywhere.
 - Note content is sent to the selected LLM provider **only** when you trigger an AI action (suggestion, ghost completion, selection action, lecture Q&A, SunnyD Cast, etc.).
 
+### Google Workspace (optional)
+
+If you enable **Google Workspace integration** and connect your Google account:
+
+- **OAuth access and refresh tokens** are stored in **`IndexedDB`** (`sunnyd_google_db`) in your browser until you disconnect or clear site data for the app.
+- Tokens are as sensitive as API keys: malicious scripts in the page (XSS) could exfiltrate them — the same class of risk as LLM API keys in `sessionStorage`.
+- The app calls **Google APIs directly from your browser** (Calendar, Drive, Docs, Sheets, Gmail) using those tokens. There is no SunnyD server in the middle.
+
 ### Other persisted data (sessionStorage — cleared on tab close)
 
 | Key | Contents |
@@ -41,6 +49,7 @@ SunnyD Notes is a fully client-side application. No backend server processes or 
 | `sd_suggFreq` | Suggestion frequency setting |
 | `sd_cast_max_min` | SunnyD Cast episode length preference |
 | `sd_cast_float_pos` | Mini player dock position |
+| `sd_workspace_*` | Workspace automation toggles |
 
 ### What is NOT collected
 
