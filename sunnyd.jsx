@@ -13,12 +13,13 @@ import { getGoogleClientId } from "./src/google/constants.js";
 import { beginGoogleAuthorization, completeAuthorizationFromUrlIfPresent } from "./src/google/oauthPkce.js";
 import { persistNewTokens, disconnectGoogle, isGoogleConnected } from "./src/google/auth.js";
 import { insertCalendarEvent } from "./src/google/calendarApi.js";
-import { analyzeWorkspaceContent, idemKey } from "./src/google/detectors.js";
+import { analyzeWorkspaceContent, idemKey, WORKSPACE_SCAN_MIN_PLAIN_CHARS } from "./src/google/detectors.js";
 import { buildWorkspaceLedgerSnippet } from "./src/google/workspaceLedger.js";
 import { normalizeCalendarDates } from "./src/google/calendarDefaults.js";
 import { plainTextMatchesSourceQuote } from "./src/google/workspaceQuotes.js";
 import { hasIdempotency, setIdempotency, saveJob, listJobs, getJob } from "./src/google/db.js";
 import { resumePendingAssignmentJobs } from "./src/google/workspaceJob.js";
+import { buildSelectionAgentBundle, buildLectureOnlyAgentBundle } from "./src/selectionAgentContext.js";
 
 /* ─── LLM: OpenAI · Claude · Gemini ─────────────────────────────────────── */
 // Lightest/fastest model per provider as of March 2026
@@ -461,6 +462,7 @@ const LS_WS_CAL = "sd_workspace_cal";
 const LS_WS_ASSIGN = "sd_workspace_assign";
 const LS_WS_INV = "sd_workspace_invites";
 const LS_WS_LINK = "sd_workspace_insert_link";
+const LS_WS_DOCK_MIN = "sd_workspace_dock_minimized";
 const PODCAST_FLOAT_W = 300;
 const PODCAST_FLOAT_H = 340;
 
@@ -1445,7 +1447,7 @@ function ReadingState() {
 }
 
 /* ─── AnnCard ────────────────────────────────────────────────────────────── */
-function AnnCard({ s, onDismiss, isNew, onHover, onLeave, onCardClick }) {
+function AnnCard({ s, onDismiss, isNew, onHover, onLeave, onCardClick, isHovered }) {
   const cat = CATS[s.cat] || CATS.expand;
   const bgTint = hexToRgba(cat.color, 0.03);
 
@@ -1454,28 +1456,50 @@ function AnnCard({ s, onDismiss, isNew, onHover, onLeave, onCardClick }) {
     onCardClick?.(s, e);
   };
 
+  const headline = (s.headline || s.preview || "").trim();
+
   return (
     <div
-      className={`ann-card${isNew ? " ann-enter" : ""}${s.applying ? " applying" : ""}`}
-      style={{ "--cat-color": cat.color, "--cat-tint": bgTint }}
+      className="ann-card-wrap"
       onMouseEnter={() => onHover?.(s.id)}
       onMouseLeave={() => onLeave?.()}
-      onClick={handleCardClick}
     >
-      <div className="ann-card-inner">
-        <div className="ann-tag">
-          <span className="ann-tag-dot" style={{ background: cat.color }} />
-          <span className="ann-tag-label" style={{ color: cat.color }}>{cat.label}</span>
-        </div>
-        {s.applying ? (
-          <div className="ann-applying">
-            <span className="think-dots"><span /><span /><span /></span>
-            <span>Weaving…</span>
+      <div
+        className={`ann-card${isNew ? " ann-enter" : ""}${s.applying ? " applying" : ""}`}
+        style={{ "--cat-color": cat.color, "--cat-tint": bgTint }}
+        onClick={handleCardClick}
+      >
+        <div className="ann-card-inner">
+          <div className="ann-tag">
+            <span className="ann-tag-dot" style={{ background: cat.color }} />
+            <span className="ann-tag-label" style={{ color: cat.color }}>{cat.label}</span>
           </div>
-        ) : (
-          <span className="ann-chevron">›</span>
+          {s.applying ? (
+            <div className="ann-applying">
+              <span className="think-dots"><span /><span /><span /></span>
+              <span>Weaving…</span>
+            </div>
+          ) : (
+            <span className="ann-chevron">›</span>
+          )}
+        </div>
+        {headline && !s.applying && (
+          <div className="ann-card-headline">{headline}</div>
         )}
       </div>
+      {/* Hover hints shown outside the fixed-height card so they're not clipped */}
+      {!s.applying && isHovered && (
+        <div className={`ann-hover-hint${s.cat === "lecture" && !s.textRef ? " ann-hover-hint--lecture" : ""}`}>
+          {s.cat === "lecture" && !s.textRef ? (
+            <><span aria-hidden>➕</span> Click to add to your notes</>
+          ) : s.textRef ? (
+            <>
+              <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor" aria-hidden><path d="M8 1a.5.5 0 0 1 .5.5v11.793l3.146-3.147a.5.5 0 1 1 .708.708l-4 4a.5.5 0 0 1-.708 0l-4-4a.5.5 0 1 1 .708-.708L7.5 13.293V1.5A.5.5 0 0 1 8 1z"/></svg>
+              Highlighted in your note
+            </>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
@@ -1518,65 +1542,179 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .key-note{font-size:11px;color:var(--ink3);line-height:1.55;}
 .key-note a{color:var(--ink2);}
 
-/* ── Header ── */
-.hdr{display:flex;align-items:center;justify-content:space-between;padding:0 18px;height:44px;flex-shrink:0;background:var(--page);border-bottom:1px solid var(--rule);}
+/* ── Header (two-row chrome: primary tools + insight cadence) ── */
+.sr-only{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
+.hdr{display:flex;flex-direction:column;flex-shrink:0;background:var(--page);border-bottom:1px solid var(--rule);}
+.hdr-shell{background:linear-gradient(180deg,#fffefb 0%,var(--page) 72%);box-shadow:0 1px 0 rgba(255,255,255,.75) inset;}
+.hdr-row{display:flex;align-items:center;flex-wrap:wrap;gap:10px 12px;width:100%;}
+.hdr-row-main{
+  justify-content:flex-start;padding:8px clamp(14px,2.5vw,22px);gap:10px 14px;border-bottom:1px solid rgba(232,226,218,.92);
+}
+.hdr-left{flex:0 0 auto;display:flex;align-items:center;}
 .logo{display:flex;align-items:center;gap:9px;}
 .logo-sq{width:25px;height:25px;background:var(--ink);color:var(--paper);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:'DM Sans',sans-serif;font-weight:700;font-size:12px;}
 .logo-name{font-size:13px;font-weight:600;color:var(--ink);letter-spacing:-.02em;}
 .logo-sep{width:1px;height:12px;background:var(--rule2);}
-.logo-tag{font-size:11px;color:var(--ink3);}
-.hdr-pill{display:flex;align-items:center;gap:6px;padding:3px 11px;border-radius:20px;border:1px solid var(--rule);background:var(--paper);font-size:11px;color:var(--ink3);font-weight:500;transition:all .25s;}
-.hdr-pill.live{border-color:var(--rule2);color:var(--ink2);}
+.logo-tag{font-size:11px;color:var(--ink3);opacity:.85;}
+.hdr-mid{
+  flex:1 1 220px;display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;min-width:0;padding:2px 0;
+}
+/* hdr-stat removed from header; kept for possible reuse */
+.hdr-stat{display:none;}
+.hdr-pill{display:flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;border:1px solid var(--rule);background:rgba(251,249,246,.92);font-size:11px;color:var(--ink3);font-weight:600;transition:background .22s ease,border-color .22s,color .22s;box-shadow:0 1px 0 rgba(255,255,255,.85) inset;}
+.hdr-pill.live{border-color:rgba(206,192,174,.92);background:linear-gradient(180deg,#fdfcfa,#f6f3ee);color:var(--ink2);}
 .hdr-dot{width:5px;height:5px;border-radius:50%;background:var(--rule2);transition:background .25s;flex-shrink:0;}
-.hdr-pill.live .hdr-dot{background:var(--ink);animation:dotBlink 1.2s ease-in-out infinite;}
-@keyframes dotBlink{0%,100%{opacity:1}50%{opacity:.2}}
+.hdr-pill.live .hdr-dot{background:#1f7a4a;animation:dotBlink 1.2s ease-in-out infinite;}
+@keyframes dotBlink{0%,100%{opacity:1}50%{opacity:.22}}
 
-/* Suggestion frequency bar */
-.sugg-freq-bar{display:flex;align-items:center;gap:10px;padding:6px 18px;background:var(--paper);border-bottom:1px solid rgba(215,205,188,.5);flex-shrink:0;}
-.sugg-freq-lbl{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);opacity:.8;}
-.sugg-freq-btn{padding:4px 12px;border-radius:6px;border:1px solid var(--rule);background:var(--page);font-size:11px;font-weight:500;color:var(--ink2);cursor:pointer;transition:all .2s;font-family:'DM Sans',sans-serif;}
-.sugg-freq-btn:hover{border-color:var(--rule2);color:var(--ink);}
-.sugg-freq-btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink);}
-.hdr-ws-act-wrap{position:relative;}
-.hdr-ws-act-btn{padding:5px 9px;border-radius:6px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .15s;}
-.hdr-ws-act-btn:hover{border-color:rgba(26,109,139,.42);background:rgba(232,246,251,.72);color:#115E83;}
-.hdr-ws-act-panel{
-  position:absolute;top:calc(100% + 6px);right:0;z-index:10010;width:min(420px,calc(100vw - 28px));max-height:min(340px,50vh);overflow:auto;
-  background:var(--page);border:1px solid var(--rule2);border-radius:10px;
-  box-shadow:0 8px 28px rgba(50,35,15,.13),0 2px 8px rgba(50,35,15,.07);
-  animation:cardRise .18s cubic-bezier(.22,1,.36,1);padding:10px 0 12px;text-align:left;
+.hdr-right{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-left:auto;min-width:0;}
+.hdr-cluster{display:flex;align-items:center;flex-wrap:wrap;gap:8px;}
+@media (min-width:900px){
+  .hdr-cluster-ai{
+    gap:8px;margin-left:4px;padding-left:12px;
+    border-left:1px solid rgba(226,217,206,.92);
+  }
 }
-.hdr-ws-act-ph{font-size:11px;font-weight:700;padding:2px 14px 10px;color:var(--ink2);letter-spacing:.04em;text-transform:uppercase;}
-.hdr-ws-act-empty{font-size:12px;color:var(--ink3);padding:4px 14px;line-height:1.45;}
-.hdr-ws-act-list{list-style:none;margin:0;padding:0;}
-.hdr-ws-act-row{display:flex;align-items:flex-start;flex-wrap:wrap;gap:6px 10px;padding:8px 14px;border-bottom:1px solid var(--rule);}
-.hdr-ws-act-row:last-child{border-bottom:none;}
-.hdr-ws-act-st{font-size:9px;font-weight:700;text-transform:uppercase;}
-.hdr-ws-st-running{color:#A85F00;}
-.hdr-ws-st-queued{color:var(--ink3);}
-.hdr-ws-st-done{color:#1A6835;}
-.hdr-ws-st-failed{color:var(--red);}
-.hdr-ws-act-title{flex:1;min-width:120px;font-size:12px;color:var(--ink);line-height:1.35;}
-.hdr-ws-act-link,.hdr-ws-act-retry{font-size:11px;font-weight:600;}
-.hdr-ws-act-link{color:#115E83;text-decoration:none;}
-.hdr-ws-act-link:hover{text-decoration:underline;}
-.hdr-ws-act-retry{padding:2px 8px;border-radius:5px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;font-family:inherit;}
-.hdr-ws-act-retry:hover{border-color:rgba(194,71,71,.42);background:rgba(255,245,243,.92);}
-.hdr-ws-act-hint{font-size:10px;color:var(--ink3);padding:12px 14px 0;margin:8px 0 0;border-top:1px solid var(--rule);line-height:1.45;}
+
+/* Compact cadence strip */
+.hdr-row-sugg{
+  align-items:center;gap:8px;
+  padding:5px clamp(14px,2.5vw,22px) 6px;
+  background:rgba(246,243,239,.65);
+  border-top:1px solid rgba(232,226,218,.7);
+}
+.hdr-sugg-kicker{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.11em;color:#9e8c78;line-height:1;flex-shrink:0;}
+.hdr-sugg-btns{display:flex;flex-wrap:wrap;align-items:center;gap:5px;}
+.sugg-freq-btn{
+  padding:4px 11px;border-radius:999px;border:1px solid rgba(218,209,195,.85);
+  background:transparent;font-size:10.5px;font-weight:600;color:var(--ink2);
+  cursor:pointer;transition:border-color .15s,color .15s,background .15s;
+  font-family:'DM Sans',sans-serif;
+}
+.sugg-freq-btn:hover{border-color:rgba(148,134,118,.65);background:var(--page);color:var(--ink);}
+.sugg-freq-btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink);font-weight:700;}
+@media (max-width:600px){
+  .hdr-row-sugg{flex-wrap:wrap;}
+}
+
 .hdr-r{display:flex;align-items:center;gap:10px;}
-.hdr-llm-select{padding:4px 8px;border-radius:5px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:500;color:var(--ink2);cursor:pointer;transition:border-color .15s;}
-.hdr-llm-select:hover{border-color:var(--rule2);}
-.export-wrap{position:relative;}
-.export-btn{padding:5px 11px;border-radius:6px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .15s;}
-.export-btn:hover{border-color:var(--rule2);background:var(--paper);color:var(--ink);}
-.hdr-podcast-btn{
-  display:flex;align-items:center;gap:5px;
-  padding:5px 11px;border-radius:6px;border:1px solid rgba(94,56,160,.38);
-  background:linear-gradient(135deg,rgba(107,62,184,.12),rgba(94,56,160,.06));
-  font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:#5E38A0;
-  cursor:pointer;transition:all .15s;white-space:nowrap;
+.hdr-ws-act-wrap{position:relative;}
+.hdr-ws-act-btn{
+  position:relative;display:inline-flex;align-items:center;gap:5px;
+  padding:5px 11px;border-radius:999px;border:1px solid var(--rule);background:var(--page);
+  font-family:'DM Sans',sans-serif;font-size:11px;font-weight:700;color:var(--ink2);cursor:pointer;
+  transition:border-color .22s ease,background .22s ease,color .2s ease,box-shadow .28s ease;
 }
-.hdr-podcast-btn:hover:not(:disabled){border-color:rgba(94,56,160,.58);background:rgba(94,56,160,.16);color:#4A2D85;}
+.hdr-ws-act-btn:hover{border-color:rgba(26,109,139,.45);background:rgba(232,246,251,.85);color:#0f5f7a;}
+.hdr-ws-act-btn--live{border-color:rgba(26,104,53,.38);background:linear-gradient(135deg,rgba(26,104,53,.1),rgba(26,104,53,.02));color:#135d32;box-shadow:0 0 0 1px rgba(26,104,53,.08);}
+.hdr-ws-act-btn--live:hover{box-shadow:0 4px 14px rgba(26,104,53,.12);}
+.hdr-ws-act-badge{
+  min-width:18px;height:18px;padding:0 5px;border-radius:999px;
+  background:linear-gradient(142deg,#C45A1A,#e07a2c);color:#fff;font-size:10px;font-weight:800;
+  display:inline-flex;align-items:center;justify-content:center;line-height:1;
+  animation:wsBadgePop .45s cubic-bezier(.22,1,.36,1);
+}
+@keyframes wsBadgePop{from{transform:scale(.4);opacity:0}60%{transform:scale(1.08)}to{transform:scale(1);opacity:1}}
+.hdr-ws-act-panel{
+  position:absolute;top:calc(100% + 10px);right:0;z-index:10010;
+  width:min(432px,calc(100vw - 20px));
+  max-height:min(72vh,520px);
+  display:flex;flex-direction:column;overflow:hidden;
+  background:linear-gradient(178deg,#fffefb 0%,var(--page) 48%);
+  border:1px solid rgba(26,104,53,.26);border-radius:16px;
+  box-shadow:0 4px 6px rgba(26,104,53,.06),0 24px 56px rgba(28,54,42,.17);
+  animation:wsPanelReveal .42s cubic-bezier(.22,1,.36,1) both;
+}
+@keyframes wsPanelReveal{from{opacity:0;transform:translateY(-10px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+.hdr-ws-act-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 16px 10px;background:linear-gradient(180deg,rgba(26,104,53,.085),transparent);flex-shrink:0;}
+.hdr-ws-act-head-copy{flex:1;min-width:0;padding-right:4px;}
+.hdr-ws-act-kicker{display:flex;align-items:center;gap:8px;margin-bottom:3px;}
+.hdr-ws-act-ph-title{font-size:12px;font-weight:820;letter-spacing:-.02em;color:#134227;line-height:1.25;display:flex;align-items:center;gap:7px;}
+.hdr-ws-act-livepulse{width:8px;height:8px;border-radius:50%;background:rgba(212,145,0,.35);flex-shrink:0;box-shadow:0 0 0 6px rgba(212,145,0,.12);}
+.hdr-ws-act-livepulse.on{background:#1f9d50;animation:agentsPulse 1.6s ease-in-out infinite;}
+@keyframes agentsPulse{0%,100%{box-shadow:0 0 0 0 rgba(31,157,80,.42)}50%{box-shadow:0 0 0 7px rgba(31,157,80,0)}}
+.hdr-ws-act-ph-sub{font-size:11px;color:var(--ink3);line-height:1.45;margin-top:5px;font-weight:490;letter-spacing:0;text-transform:none;max-width:52ch;}
+.hdr-ws-act-head-actions{display:flex;align-items:center;gap:4px;flex-shrink:0;}
+.hdr-ws-act-iconbtn{width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;border-radius:10px;border:1px solid rgba(26,104,53,.28);background:rgba(253,251,246,.92);cursor:pointer;color:var(--ink2);transition:background .18s ease,border-color .18s ease,transform .12s;font-family:inherit;line-height:1;font-size:15px;}
+.hdr-ws-act-iconbtn:hover{background:rgba(26,104,53,.09);border-color:rgba(26,104,53,.42);color:var(--ink);}
+.hdr-ws-act-iconbtn:active{transform:scale(.96);}
+.hdr-ws-act-iconbtn.hdr-ws-act-close{font-size:20px;font-weight:300;padding-bottom:2px;line-height:.85;}
+.hdr-ws-act-metrics{display:flex;flex-wrap:wrap;gap:12px;padding:8px 16px 12px;margin:0;background:rgba(246,243,239,.74);border-top:1px solid rgba(232,226,218,.92);flex-shrink:0;}
+.hdr-ws-act-metric{font-size:10.5px;font-weight:630;color:#7a7268;}
+.hdr-ws-act-metric b{font-weight:820;color:#3c3428;margin-right:5px;font-size:17px;line-height:1;vertical-align:-2px;font-variant-numeric:tabular-nums;}
+.hdr-ws-act-tabs{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 10px;margin:0;background:rgba(246,243,239,.45);flex-shrink:0;}
+.hdr-ws-act-tab{
+  font:inherit;font-size:10.5px;font-weight:700;padding:7px 12px;border-radius:999px;border:1px solid rgba(218,207,188,.94);
+  background:var(--page);color:var(--ink2);cursor:pointer;transition:background .18s,color .18s,border-color .18s;
+}
+.hdr-ws-act-tab:hover{border-color:rgba(148,134,118,.72);background:#fffefb;}
+.hdr-ws-act-tab.on{border-color:rgba(26,104,53,.52);background:rgba(26,104,53,.09);color:#14402a;font-weight:800;}
+.hdr-ws-act-scrollwrap{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+.hdr-ws-act-empty{font-size:12.5px;color:var(--ink3);padding:18px 20px 24px;line-height:1.55;text-align:center;max-width:36ch;margin:0 auto;}
+.hdr-ws-act-list{margin:0;padding:8px 10px 12px 10px;list-style:none;}
+.hdr-ws-act-card{display:flex;align-items:flex-start;gap:12px;padding:11px 10px;margin-bottom:7px;border-radius:12px;border:1px solid rgba(226,217,206,.94);background:rgba(255,253,249,.94);box-shadow:0 1px 2px rgba(42,36,26,.03);transition:background .14s ease,border-color .14s ease,transform .14s;}
+.hdr-ws-act-card:hover{border-color:rgba(26,104,53,.42);background:#fffefb;transform:translateY(-1px);}
+.hdr-ws-act-glyph{
+  flex-shrink:0;width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:11px;font-size:19px;line-height:1;
+  background:rgba(232,246,239,.92);border:1px solid rgba(26,104,53,.22);
+}
+.hdr-ws-act-card-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;}
+.hdr-ws-act-card-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;}
+.hdr-ws-act-kind{font-size:8.8px;font-weight:820;letter-spacing:.09em;text-transform:uppercase;color:#1b6f8f;}
+.hdr-ws-act-ts{font-size:10px;color:#988b7f;font-weight:600;white-space:nowrap;}
+.hdr-ws-act-mainline{display:flex;align-items:flex-start;gap:10px;width:100%;flex-wrap:wrap;margin-top:2px;}
+.hdr-ws-act-mainline .hdr-ws-act-st{flex-shrink:0;margin-top:2px;}
+.hdr-ws-act-mainline .hdr-ws-act-card-title,
+.hdr-ws-act-mainline .hdr-ws-act-card-title-link{flex:1;min-width:0;}
+.hdr-ws-act-st{font-size:8.8px;font-weight:780;text-transform:uppercase;padding:4px 8px;border-radius:8px;line-height:1;flex-shrink:0;}
+.hdr-ws-st-running{color:#8a5200;background:rgba(212,145,0,.16);}
+.hdr-ws-st-queued{color:var(--ink3);background:var(--paper);border:1px solid rgba(218,207,188,.92);}
+.hdr-ws-st-done{color:#135d32;background:rgba(26,104,53,.13);}
+.hdr-ws-st-failed{color:var(--red);background:rgba(199,62,62,.11);}
+.hdr-ws-act-step{font-size:10.8px;line-height:1.35;color:var(--ink3);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;margin-top:1px;font-weight:500;}
+.hdr-ws-act-card-actions{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;min-width:96px;}
+.hdr-ws-act-actions-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;}
+.hdr-ws-act-link,.hdr-ws-act-retry{font-size:11px;font-weight:740;}
+.hdr-ws-act-link{
+  white-space:nowrap;color:#095d75;text-decoration:none;padding:5px 11px;border-radius:9px;background:rgba(12,129,157,.09);border:1px solid rgba(12,129,157,.26);
+  transition:background .14s,color .14s,border-color .14s;}
+.hdr-ws-act-link:hover{background:rgba(12,129,157,.17);border-color:rgba(12,129,157,.42);text-decoration:none;}
+.hdr-ws-act-retry{
+  padding:5px 10px;border-radius:9px;border:1px solid rgba(199,62,62,.41);background:rgba(255,246,243,.96);cursor:pointer;font-family:inherit;color:#ab1818;font-size:11px;font-weight:750;
+}
+.hdr-ws-act-retry:hover{background:#fff;border-color:rgba(199,62,62,.58);}
+.hdr-ws-act-err{font-size:9.8px;line-height:1.4;color:var(--red);margin:4px 0 0;text-align:right;max-width:100%;}
+.hdr-ws-act-details{margin-top:8px;text-align:right;}
+.hdr-ws-act-details>summary{font-size:10px;font-weight:690;color:rgba(148,124,118,.92);cursor:pointer;user-select:none;list-style:none;}
+.hdr-ws-act-details>summary::-webkit-details-marker{display:none;}
+.hdr-ws-act-details-pre{margin-top:8px;text-align:left;padding:10px;border-radius:9px;background:rgba(199,62,62,.055);overflow-x:auto;font-size:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:10em;color:#6b2a29;}
+.hdr-ws-act-card-title{font-size:13px;font-weight:660;color:var(--ink);line-height:1.38;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;margin:0;text-align:left;width:100%;}
+.hdr-ws-act-card-title-link{color:inherit;text-decoration:none;transition:opacity .14s;color:var(--ink);}
+.hdr-ws-act-card-title-link:hover{text-decoration:none;opacity:.86;}
+.hdr-ws-act-footer{font-size:10px;line-height:1.45;color:var(--ink3);margin:0;padding:10px 16px 12px;background:rgba(250,246,239,.94);border-top:1px solid rgba(232,226,218,.94);flex-shrink:0;}
+
+.hdr-llm-select{
+  padding:6px 28px 6px 10px;border-radius:9px;border:1px solid rgba(218,209,198,.94);
+  background:linear-gradient(180deg,var(--page),#faf8f6);font-family:'DM Sans',sans-serif;
+  font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:border-color .15s,box-shadow .15s;
+  min-height:31px;line-height:1.25;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='none' viewBox='0 0 10 10'%3E%3Cpath stroke='%23988a7a' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.25' d='M2 3h6L5 7z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 9px center;
+}
+.hdr-llm-select:hover{border-color:rgba(148,136,118,.65);}
+.export-wrap{position:relative;}
+.export-btn{padding:6px 13px;border-radius:999px;border:1px solid rgba(218,209,198,.94);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .15s;line-height:1.25;white-space:nowrap;box-shadow:0 1px 2px rgba(42,38,34,.05);}
+.export-btn:hover{border-color:rgba(148,134,118,.72);background:#fffefb;color:var(--ink);}
+.hdr-podcast-btn{
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  padding:6px 13px;border-radius:999px;border:1px solid rgba(139,114,178,.52);
+  background:linear-gradient(180deg,rgba(122,92,174,.13),rgba(94,56,160,.06));
+  font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:#4c2d74;
+  cursor:pointer;transition:border-color .15s,background .15s,color .15s;white-space:nowrap;
+  box-shadow:0 1px 2px rgba(72,54,118,.06);
+}
+.hdr-podcast-btn:hover:not(:disabled){border-color:rgba(94,56,160,.72);background:rgba(94,56,160,.16);color:#3a1f5f;}
 .hdr-podcast-btn:disabled{opacity:.45;cursor:not-allowed;}
 .export-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:9999;width:220px;background:var(--page);border:1px solid var(--rule2);border-radius:10px;box-shadow:0 8px 28px rgba(50,35,15,.13),0 2px 8px rgba(50,35,15,.07);overflow:hidden;animation:cardRise .18s cubic-bezier(.22,1,.36,1);}
 .export-item{display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;background:none;border:none;cursor:pointer;text-align:left;transition:background .12s;}
@@ -1586,11 +1724,11 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .export-item-desc{display:block;font-size:10px;color:var(--ink3);font-family:'DM Sans',sans-serif;margin-top:1px;}
 .hdr-sep{width:1px;height:14px;background:var(--rule2);opacity:.6;}
 .hdr-wc{font-size:11px;color:var(--ink3);opacity:.6;}
-.btn-link{font-size:11px;color:var(--ink3);background:none;border:none;cursor:pointer;padding:3px 7px;border-radius:4px;transition:background .15s;}
-.btn-link:hover{background:var(--paper);color:var(--ink2);}
+.btn-link{font-size:11px;background:none;border:none;cursor:pointer;padding:7px 9px;border-radius:8px;transition:background .15s,color .15s;color:var(--ink3);font-weight:600;}
+.btn-link:hover{background:rgba(232,224,212,.45);color:var(--ink2);}
 
 /* ── Lecture toggle & transcript ── */
-.lecture-btn{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:6px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .2s;}
+.lecture-btn{display:flex;align-items:center;gap:6px;padding:6px 13px;border-radius:999px;border:1px solid rgba(218,209,198,.94);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .2s;line-height:1.25;white-space:nowrap;box-shadow:0 1px 2px rgba(42,38,34,.05);}
 .lecture-btn:hover{border-color:var(--rule2);color:var(--ink);background:var(--paper);}
 .lecture-btn.on{background:#1A1410;color:#fff;border-color:#1A1410;}
 .lecture-btn.on:hover{background:#2C221A;}
@@ -1604,7 +1742,21 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .lecture-panel-lbl{display:flex;align-items:center;gap:6px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--ink3);}
 .lecture-panel-actions{display:flex;gap:6px;align-items:center;}
 .lecture-panel-btn{padding:4px 10px;border-radius:5px;border:1px solid var(--rule);background:var(--page);font-family:'DM Sans',sans-serif;font-size:10px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .15s;}
-.lecture-panel-btn:hover{background:var(--paper);border-color:var(--rule2);color:var(--ink);}
+.lecture-act-agents{
+  display:inline-flex!important;align-items:center!important;gap:6px!important;
+  font-weight:700!important;
+  border-color:rgba(26,104,53,.42)!important;
+  color:#13542a!important;
+  background:linear-gradient(135deg,rgba(26,104,53,.1),rgba(26,104,53,.04))!important;
+  box-shadow:0 1px 4px rgba(26,104,53,.1)!important;
+}
+.lecture-act-agents:hover{
+  background:linear-gradient(135deg,rgba(26,104,53,.18),rgba(26,104,53,.1))!important;
+  border-color:rgba(26,104,53,.62)!important;
+  transform:translateY(-1px)!important;
+  box-shadow:0 3px 8px rgba(26,104,53,.14)!important;
+}
+.lecture-act-agents:active{transform:translateY(0)!important;}
 .lecture-pause-btn{padding:4px 10px;border-radius:5px;border:1px solid rgba(94,56,160,.3);background:rgba(94,56,160,.07);font-family:'DM Sans',sans-serif;font-size:10px;font-weight:600;color:#5E38A0;cursor:pointer;transition:all .15s;}
 .lecture-pause-btn:hover{background:rgba(94,56,160,.14);border-color:rgba(94,56,160,.5);}
 /* Stats row */
@@ -1727,8 +1879,9 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .margin-line{position:absolute;left:72px;top:0;bottom:0;width:1px;background:rgba(200,155,130,.15);pointer-events:none;}
 .title-inp{font-family:'DM Sans',sans-serif;font-size:26px;font-weight:700;color:var(--ink);border:none;outline:none;background:transparent;width:100%;padding:0;line-height:1.3;margin-bottom:5px;caret-color:var(--ink);letter-spacing:-.02em;}
 .title-inp::placeholder{color:#CEC6BA;}
-.meta-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:10px;color:#BCB4A8;text-transform:uppercase;letter-spacing:.06em;font-weight:500;margin-bottom:18px;}
-.ann-badge{padding:1px 7px;border-radius:10px;background:var(--paper);border:1px solid var(--rule2);color:var(--ink2);font-size:9px;font-weight:700;}
+.meta-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:10px;color:#BCB4A8;text-transform:uppercase;letter-spacing:.05em;font-weight:500;margin-bottom:16px;}
+.meta-row>span+span::before{content:"·";margin-right:6px;opacity:.5;}
+.ann-badge{padding:2px 8px;border-radius:999px;background:rgba(94,56,160,.08);border:1px solid rgba(94,56,160,.18);color:#5E38A0;font-size:8.5px;font-weight:700;letter-spacing:.04em;}
 .divider{height:1px;background:var(--rule);margin-bottom:26px;}
 .ta-wrap{position:relative;width:100%;}
 /* ── Tiptap Editor ── */
@@ -1800,8 +1953,20 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .hl-link:hover{color:#085555;}
 
 /* ── Ghost hint bar (Tab/Esc hint shown when ghost is active) ── */
-.ghost-hint{display:flex;align-items:center;gap:7px;margin-top:8px;padding:6px 12px;background:var(--paper);border:1px solid var(--rule);border-radius:5px;opacity:0;animation:fadeSoft .2s ease forwards;}
-.ghost-hint-txt{font-size:10.5px;color:var(--ink3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ghost-hint{
+  display:flex;align-items:center;gap:8px;
+  margin-top:6px;padding:7px 12px 7px 14px;
+  background:linear-gradient(135deg,var(--paper),rgba(248,244,237,.6));
+  border:1px solid rgba(215,205,190,.7);border-radius:8px;
+  opacity:0;animation:fadeSoft .22s ease forwards;
+  box-shadow:0 1px 4px rgba(50,35,15,.04);
+}
+.ghost-hint-completion{
+  font-size:12px;color:var(--ink2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-style:italic;font-family:'DM Sans',sans-serif;
+}
+.ghost-hint-txt{font-size:10.5px;color:var(--ink3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:italic;}
+.ghost-hint-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--ink3);opacity:.65;flex-shrink:0;white-space:nowrap;}
 .kbd{padding:2px 7px;background:var(--page);border:1px solid var(--rule2);border-radius:4px;font-size:10px;font-weight:600;color:var(--ink2);}
 .ghost-esc{font-size:10px;color:#C0B8AE;}
 
@@ -1809,27 +1974,65 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .ann-col{width:260px;flex-shrink:0;min-height:0;padding:24px 14px 80px 14px;background:var(--paper);border-left:1px solid rgba(215,205,188,.55);overflow-y:auto;}
 .ann-col-hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--ink3);opacity:.55;margin-bottom:10px;padding:0;}
 .ann-col-body{position:relative;width:100%;overflow:visible;}
-.ann-empty{padding:12px 0;font-family:'DM Sans',sans-serif;font-size:11px;color:var(--ink3);line-height:1.5;opacity:.65;}
+.ann-empty{
+  padding:20px 12px 16px;font-family:'DM Sans',sans-serif;font-size:11px;color:var(--ink3);
+  line-height:1.65;text-align:center;opacity:.9;
+}
 
 /* ── Annotation cards (pill style) ── */
+.ann-card-wrap{
+  position:relative;
+  margin-bottom:6px;
+}
 .ann-card{
   position:relative;
-  height:44px;
+  min-height:44px;
   background:#fff;
   border:1px solid #E5DDD4;
   border-radius:8px;
-  margin-bottom:6px;
   overflow:hidden;
   transition:box-shadow .15s ease,transform .15s ease,background .15s ease;
   box-shadow:none;
   cursor:pointer;
 }
-.ann-card:hover{
+.ann-card-wrap:hover .ann-card{
   transform:translateY(-1px);
   box-shadow:0 3px 10px rgba(0,0,0,.09);
   background:var(--cat-tint,var(--page));
 }
 .ann-card.expanded{box-shadow:0 3px 10px rgba(0,0,0,.09);}
+.ann-hover-hint{
+  display:flex;align-items:center;gap:5px;
+  padding:5px 14px 7px;
+  font-size:10.5px;font-weight:600;color:var(--ink3);
+  animation:fadeSoft .15s ease;
+  border-top:none;
+}
+.ann-hover-hint--lecture{color:#5E38A0;}
+.ann-lecture-hover-hint,.ann-hover-ref-hint{display:none;}
+.ann-card-headline{
+  font-size:12px;font-weight:550;color:var(--ink2);line-height:1.4;
+  padding:5px 12px 8px;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+  border-top:1px solid rgba(232,224,212,.55);
+  word-break:break-word;
+  font-family:'DM Sans',sans-serif;
+}
+.ann-lecture-hover-hint{
+  display:flex;align-items:center;gap:5px;
+  padding:5px 12px 8px;
+  font-size:10.5px;font-weight:600;color:#5E38A0;
+  border-top:1px solid rgba(94,56,160,.12);
+  background:rgba(94,56,160,.04);
+  animation:fadeSoft .15s ease;
+}
+.ann-hover-ref-hint{
+  display:flex;align-items:center;gap:5px;
+  padding:4px 12px 7px;
+  font-size:10px;font-weight:600;color:var(--ink3);
+  border-top:1px solid rgba(232,224,212,.55);
+  animation:fadeSoft .15s ease;
+}
 .ann-card-inner{
   display:flex;
   align-items:center;
@@ -1874,13 +2077,13 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .ann-enter{opacity:0;animation:annEnter .55s cubic-bezier(.22,1,.36,1) forwards;}
 
 /* ── Reading state in suggestion panel ── */
-.reading-state{display:flex;flex-direction:column;align-items:center;padding:28px 20px 24px;gap:16px;animation:annEnter .4s ease forwards;}
-.reading-brand{position:relative;width:80px;height:80px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-.reading-logo-img{width:80px;height:80px;object-fit:contain;object-position:center;padding:10px 6px;border-radius:50%;background:#ed7f21;position:relative;z-index:1;box-shadow:0 4px 16px rgba(237,127,33,.45);}
-.reading-scan-ring{position:absolute;inset:-8px;border-radius:50%;border:1.5px solid rgba(237,127,33,.5);animation:scanRing 2s ease-in-out infinite;pointer-events:none;}
-.reading-scan-ring.r2{inset:-18px;border-color:rgba(237,127,33,.28);animation-delay:.55s;animation-duration:2.5s;}
-.reading-scan-ring.r3{inset:-30px;border-color:rgba(237,127,33,.12);animation-delay:1.1s;animation-duration:3s;}
-@keyframes scanRing{0%{transform:scale(.88);opacity:0}25%{opacity:1}100%{transform:scale(1.1);opacity:0}}
+.reading-state{display:flex;flex-direction:column;align-items:center;padding:24px 20px 20px;gap:12px;animation:annEnter .4s ease forwards;}
+.reading-brand{position:relative;width:64px;height:64px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.reading-logo-img{width:64px;height:64px;object-fit:contain;object-position:center;padding:8px 5px;border-radius:50%;background:#ed7f21;position:relative;z-index:1;box-shadow:0 3px 12px rgba(237,127,33,.35);}
+.reading-scan-ring{position:absolute;inset:-8px;border-radius:50%;border:1.5px solid rgba(237,127,33,.4);animation:scanRing 2.2s ease-in-out infinite;pointer-events:none;}
+.reading-scan-ring.r2{inset:-20px;border-color:rgba(237,127,33,.2);animation-delay:.6s;animation-duration:2.8s;}
+.reading-scan-ring.r3{display:none;}
+@keyframes scanRing{0%{transform:scale(.9);opacity:0}30%{opacity:1}100%{transform:scale(1.12);opacity:0}}
 .reading-label{font-size:11.5px;font-weight:600;color:var(--ink2);font-family:'DM Sans',sans-serif;letter-spacing:.01em;min-height:18px;text-align:center;transition:opacity .2s ease;}
 .reading-label.fade-out{opacity:0;}
 .reading-bars{display:flex;flex-direction:column;gap:6px;width:100%;padding:0 8px;}
@@ -1922,7 +2125,13 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .sugg-panel.hidden{transform:translateX(100%);}
 
 /* Docked floating card */
-.docked-card{width:300px;max-height:420px;overflow-y:auto;background:#fff;border:1px solid #DDD5C8;border-radius:10px;box-shadow:0 8px 32px rgba(50,35,15,.14),0 2px 8px rgba(50,35,15,.08);padding:14px 16px;animation:dockedIn 1s cubic-bezier(.22,1,.36,1) forwards;}
+.docked-card{
+  width:300px;max-height:440px;overflow-y:auto;
+  background:var(--page);
+  border:1px solid rgba(210,200,186,.9);border-radius:12px;
+  box-shadow:0 8px 32px rgba(50,35,15,.14),0 2px 8px rgba(50,35,15,.08),0 0 0 1px rgba(255,255,255,.85) inset;
+  padding:14px 16px;animation:dockedIn 1s cubic-bezier(.22,1,.36,1) forwards;
+}
 @keyframes dockedIn{from{opacity:0;transform:translateX(24px) scale(.96)}to{opacity:1;transform:translateX(0) scale(1)}}
 .dc-header{display:flex;align-items:center;gap:7px;margin-bottom:10px;}
 .dc-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
@@ -1939,10 +2148,22 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .dc-art-src{font-weight:700;text-transform:uppercase;letter-spacing:.05em;flex-shrink:0;}
 .dc-art-title{flex:1;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .dc-btns{display:flex;gap:8px;}
-.dc-apply{padding:7px 14px;background:#1A5C32;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;transition:opacity .17s;}
-.dc-apply:hover{opacity:.85;}
-.dc-decline{padding:7px 14px;background:transparent;color:#B84040;border:1px solid #E8C8C8;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;transition:background .15s;}
-.dc-decline:hover{background:#FFF0F0;}
+.dc-apply{
+  padding:7px 16px;
+  background:var(--green);color:#fff;border:none;border-radius:8px;
+  cursor:pointer;font-size:12px;font-weight:650;font-family:inherit;
+  transition:opacity .17s,transform .12s,box-shadow .15s;
+  box-shadow:0 2px 6px rgba(26,104,53,.2);letter-spacing:.01em;
+}
+.dc-apply:hover{opacity:.88;transform:translateY(-1px);box-shadow:0 4px 10px rgba(26,104,53,.28);}
+.dc-apply:active{transform:translateY(0);}
+.dc-decline{
+  padding:7px 14px;background:transparent;color:var(--ink3);
+  border:1.5px solid var(--rule2);border-radius:8px;
+  cursor:pointer;font-size:12px;font-weight:600;font-family:inherit;
+  transition:background .15s,border-color .15s,color .15s;
+}
+.dc-decline:hover{background:rgba(184,48,48,.06);color:var(--red);border-color:rgba(184,48,48,.38);}
 
 /* Card header */
 .ann-header{display:flex;align-items:center;justify-content:space-between;padding:5px 10px 0;cursor:pointer;user-select:none;}
@@ -2210,6 +2431,31 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
   transform:translateX(-50%);
   user-select:none;min-width:220px;
 }
+/* Primary Workspace agents chip */
+.sel-toolbar-agent-wrap{padding:3px 3px 0;}
+.sel-toolbar-agents{
+  position:relative;display:flex;align-items:center;justify-content:center;gap:7px;width:100%;
+  padding:7px 12px;border-radius:8px;border:1px solid rgba(31,157,80,.45);
+  background:linear-gradient(135deg,rgba(31,157,80,.22),rgba(26,104,53,.06));
+  color:#eaf7ef;font-family:'DM Sans',sans-serif;font-size:12.5px;font-weight:700;
+  cursor:pointer;overflow:hidden;
+  transition:transform .14s ease,background .14s ease,border-color .14s ease;
+}
+.sel-toolbar-agents:hover{background:linear-gradient(135deg,rgba(31,157,80,.32),rgba(26,104,53,.14));border-color:rgba(31,157,80,.65);transform:translateY(-1px);}
+.sel-toolbar-agents:active{transform:translateY(0);}
+.sel-toolbar-agents-ring{position:absolute;inset:0;border-radius:8px;border:1px solid rgba(212,145,0,.22);pointer-events:none;}
+.sel-toolbar-agents-glow{
+  position:absolute;inset:-40%;background:radial-gradient(circle at 50% 50%,rgba(31,157,80,.28),transparent 55%);
+  opacity:.65;pointer-events:none;animation:selAgentsGlow 2.8s ease-in-out infinite;
+}
+@keyframes selAgentsGlow{
+  0%,100%{transform:translate(0,0) scale(.9);opacity:.45;}
+  50%{transform:translate(3%,2%) scale(1.05);opacity:.75;}
+}
+@media (prefers-reduced-motion:reduce){
+  .sel-toolbar-agents-glow,.sel-toolbar-agents .sel-toolbar-agents-ring{display:none!important;}
+  .sel-toolbar-agents{animation:none!important;}
+}
 @keyframes selToolIn{from{opacity:0;transform:translateX(-50%) scale(.88)}to{opacity:1;transform:translateX(-50%) scale(1)}}
 /* AI action row */
 .sel-toolbar-acts{display:flex;align-items:center;gap:1px;}
@@ -2242,17 +2488,35 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 /* Thinking pill — replaces toolbar while AI works */
 .sel-thinking-pill{
   position:fixed;z-index:9999;
-  display:inline-flex;align-items:center;gap:7px;
-  padding:6px 14px;
+  display:inline-flex;align-items:center;gap:8px;
+  padding:7px 16px;
   background:#1A1410;border-radius:20px;
-  color:rgba(255,255,255,.8);
+  color:rgba(255,255,255,.85);
   font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;
-  box-shadow:0 4px 18px rgba(0,0,0,.22);
+  box-shadow:0 4px 18px rgba(0,0,0,.22),0 1px 4px rgba(0,0,0,.14);
   transform:translateX(-50%);
   animation:selToolIn .15s ease forwards;
-  pointer-events:none;
+  letter-spacing:.01em;
+  border:1px solid rgba(255,255,255,.06);
 }
-/* Floating result card */
+.sel-thinking-pill--agents{
+  background:linear-gradient(135deg,#1a2e22,#1A1410);
+  border:1px solid rgba(31,157,80,.38);
+  box-shadow:0 4px 22px rgba(26,104,53,.18),0 1px 6px rgba(26,104,53,.08);
+  color:#d8f0e2;
+}
+.sel-thinking-spinner{
+  width:13px;height:13px;border-radius:50%;
+  border:1.8px solid rgba(255,255,255,.18);
+  border-top-color:rgba(255,255,255,.82);
+  animation:tpSpin .7s linear infinite;
+  flex-shrink:0;
+}
+.sel-thinking-pill--agents .sel-thinking-spinner{
+  border-color:rgba(31,157,80,.2);
+  border-top-color:rgba(31,200,100,.9);
+}
+@keyframes tpSpin{to{transform:rotate(360deg)}}
 .sel-result-card{
   position:fixed;z-index:9999;width:420px;max-width:calc(100vw - 24px);
   background:var(--page);border:1px solid var(--rule2);border-radius:12px;
@@ -2393,6 +2657,9 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .hdr-ws-btn{
   width:32px;height:32px;border-radius:8px;font-weight:800;font-size:13px;position:relative;
   border:1px solid var(--rule2);background:var(--paper);color:var(--ink2);cursor:pointer;line-height:1;
+}
+.hdr-ws-btn.hdr-ws-btn--labeled{
+  width:auto;padding:0 12px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;
   font-family:'DM Sans',sans-serif;
   transition:border-color .25s ease,color .22s ease,background .22s ease,transform .35s cubic-bezier(.22,1,.36,1);
 }
@@ -2410,84 +2677,312 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 @keyframes wsPipLife{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
 
 .ws-dock-status{
-  font-size:10.5px;line-height:1.45;color:var(--ink2);display:flex;align-items:center;gap:8px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--rule);
+  font-size:10.5px;line-height:1.45;color:var(--ink2);display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;padding:10px 11px;background:linear-gradient(135deg,rgba(26,104,53,.07),rgba(107,62,184,.06));border-radius:10px;border:1px solid rgba(26,104,53,.14);
+  animation:wsStatusIn .42s cubic-bezier(.22,1,.36,1) both;
 }
-.ws-dock-status .ws-mini-dots{display:inline-flex;gap:3px;}
-.ws-dock-status .ws-mini-dots i{width:4px;height:4px;border-radius:50%;background:#1A6835;opacity:.5;animation:wsMiniWave 1.2s ease-in-out infinite;}
-.ws-dock-status .ws-mini-dots i:nth-child(2){animation-delay:.22s;}
-.ws-dock-status .ws-mini-dots i:nth-child(3){animation-delay:.44s;}
-@keyframes wsMiniWave{0%,100%{opacity:.28;transform:translateY(0)}50%{opacity:1;transform:translateY(-2px)}}
+@keyframes wsStatusIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.ws-dock-status[data-phase='extract']{border-color:rgba(26,148,91,.42);background:linear-gradient(135deg,rgba(26,148,91,.14),rgba(26,104,53,.06));}
+.ws-dock-status[data-phase='cloud']{border-color:rgba(66,134,217,.35);background:linear-gradient(135deg,rgba(66,134,217,.14),rgba(26,104,53,.06));}
+.ws-dock-status[data-phase='wait']{border-color:rgba(212,145,0,.28);background:linear-gradient(135deg,rgba(255,218,138,.35),transparent);}
+.ws-dock-status .ws-mini-dots{display:inline-flex;gap:3px;padding-top:2px;}
+.ws-dock-status .ws-mini-dots i{width:5px;height:5px;border-radius:50%;background:#1A6835;opacity:.55;animation:wsMiniWave 1.05s ease-in-out infinite;}
+.ws-dock-status .ws-mini-dots i:nth-child(2){animation-delay:.2s;}
+.ws-dock-status .ws-mini-dots i:nth-child(3){animation-delay:.4s;}
+@keyframes wsMiniWave{0%,100%{opacity:.25;transform:translateY(0)}50%{opacity:1;transform:translateY(-3px)}}
 .ws-dock-muted{color:var(--ink3);}
 .ws-dock-strong{font-weight:600;color:var(--ink2);}
 .workspace-pop-status{
-  font-size:10.5px;color:var(--ink3);margin-top:-4px;margin-bottom:8px;line-height:1.42;padding:8px 9px;background:linear-gradient(180deg,rgba(26,104,53,.045),transparent);border-radius:8px;border:1px solid rgba(26,104,53,.07);
+  font-size:10.5px;color:var(--ink3);margin-top:-4px;margin-bottom:10px;line-height:1.45;padding:11px 12px;background:linear-gradient(135deg,rgba(26,104,53,.06),rgba(94,56,160,.05));border-radius:10px;border:1px solid rgba(26,104,53,.14);
 }
-.workspace-pop-status .ws-pop-strong{font-weight:600;color:var(--ink2);display:block;margin-bottom:5px;font-size:11px;}
+.workspace-pop-status .ws-pop-strong{font-weight:700;color:var(--ink2);display:block;margin-bottom:5px;font-size:11.5px;}
 
 .workspace-pop{
   position:absolute;right:0;top:100%;margin-top:8px;z-index:10020;
-  width:min(320px,calc(100vw - 24px));
-  background:var(--page);border:1px solid var(--rule2);border-radius:12px;
-  box-shadow:0 14px 44px rgba(50,35,15,.14);padding:14px 14px 12px;text-align:left;
+  width:min(392px,calc(100vw - 24px));
+  max-height:min(78vh,620px);
+  overflow-x:hidden;overflow-y:auto;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+  background:linear-gradient(178deg,#fffefb 0%,var(--page) 55%);
+  border:1px solid rgba(232,226,218,.95);border-radius:14px;
+  box-shadow:0 8px 12px rgba(42,36,26,.04),0 22px 56px rgba(42,36,26,.12);
+  padding:16px 15px 14px;text-align:left;
 }
-.workspace-pop-h{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);margin-bottom:10px;}
-.workspace-row{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink2);margin:6px 0;cursor:pointer;}
-.workspace-row input{accent-color:#1A6835;}
+.workspace-pop-h{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);margin:0 0 12px;padding-bottom:10px;border-bottom:1px solid rgba(232,226,218,.92);}
+.workspace-pop-fieldset{
+  margin:0 0 14px;padding:11px 12px 10px;border-radius:12px;
+  background:rgba(246,243,239,.65);border:1px solid rgba(226,217,206,.88);
+}
+.workspace-pop-fieldset-caption{
+  font-size:9.5px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#9e8c78;margin:0 0 8px;line-height:1.2;
+}
+.workspace-row{
+  display:flex;align-items:flex-start;gap:11px;font-size:12.5px;line-height:1.45;color:var(--ink2);
+  margin:0;padding:8px 8px;border-radius:10px;cursor:pointer;
+  transition:background .12s ease;
+}
+.workspace-row+.workspace-row{margin-top:2px;}
+.workspace-row:hover{background:rgba(255,255,255,.72);}
+.workspace-row input{
+  accent-color:#1A6835;margin-top:3px;flex-shrink:0;width:16px;height:16px;
+}
+.workspace-row span{flex:1;min-width:0;}
+.workspace-pop-actions{display:flex;flex-direction:column;gap:8px;margin-top:4px;}
+.workspace-btn-scan{
+  width:100%;padding:11px 14px;border:none;border-radius:10px;cursor:pointer;font:inherit;font-weight:700;font-size:12.5px;
+  background:linear-gradient(135deg,#1f7a44,#1A6835);color:#fff;
+  box-shadow:0 2px 10px rgba(26,104,53,.22);transition:opacity .15s,transform .12s;
+}
+.workspace-btn-scan:hover:not(:disabled){opacity:.94;transform:translateY(-1px);}
+.workspace-btn-scan:disabled{opacity:.52;cursor:not-allowed;}
+.workspace-btn-outline{
+  width:100%;padding:9px 14px;border-radius:10px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+  background:var(--page);border:1px solid rgba(148,134,118,.55);color:var(--ink2);transition:background .12s,border-color .12s;
+}
+.workspace-btn-outline:hover{border-color:var(--ink3);background:rgba(250,249,246,.98);}
+.workspace-btn-danger-soft{
+  width:100%;margin-top:0;padding:9px 14px;border-radius:10px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+  background:var(--page);border:1px solid rgba(184,48,48,.35);color:#942a2a;transition:background .12s,border-color .12s;
+}
+.workspace-btn-danger-soft:hover{background:rgba(184,48,48,.06);border-color:rgba(184,48,48,.52);}
 .workspace-pop-note{font-size:11px;color:var(--ink3);line-height:1.45;margin:8px 0;}
+.workspace-pop-note-muted{font-size:10.5px;line-height:1.5;color:#9a9186;margin:6px 0 10px;}
 .workspace-pop-err{font-size:11.5px;color:var(--red);margin:4px 0;}
 .workspace-pop-hintmsg{font-size:11px;color:#6a4c00;line-height:1.45;margin:8px 0;padding:10px 12px;border-radius:9px;background:rgba(255,244,209,.94);border:1px solid rgba(198,154,92,.42);}
 .workspace-pop-ok{font-size:11px;color:#174a2d;line-height:1.45;margin:8px 0;padding:10px 12px;border-radius:9px;background:rgba(229,246,237,.94);border:1px solid rgba(74,157,117,.42);}
 .workspace-code{font-size:10px;background:var(--paper);padding:1px 5px;border-radius:4px;}
-.workspace-connect{width:100%;margin-top:8px;}
-.workspace-disconnect{width:100%;margin-top:6px;}
+.ws-dock-anchor{
+  flex-shrink:0;width:100%;max-width:100%;
+  margin-top:28px;padding-top:16px;
+  border-top:1px solid rgba(232,226,218,.75);
+  position:sticky;bottom:max(10px,env(safe-area-inset-bottom,0px));z-index:6;
+  pointer-events:auto;
+}
 .ws-dock{
-  position:fixed;right:14px;bottom:14px;z-index:9990;max-width:min(320px,calc(100vw - 28px));
-  background:var(--page);border:1px solid var(--rule2);border-radius:12px;
-  box-shadow:0 12px 36px rgba(50,35,15,.12);padding:10px 11px;max-height:min(40vh,320px);overflow:auto;font-size:11.5px;
+  position:relative;right:auto;bottom:auto;left:auto;
+  width:100%;max-width:100%;
+  background:linear-gradient(180deg,var(--page) 0%,rgba(250,248,244,.97) 100%);
+  border:1px solid rgba(26,104,53,.22);border-radius:16px;
+  box-shadow:
+    0 1px 3px rgba(26,104,53,.05),
+    0 12px 36px rgba(40,55,35,.1);
+  padding:0;max-height:min(46vh,380px);overflow:hidden;font-size:11.5px;
+  display:flex;flex-direction:column;
+  animation:wsDockFloat .5s cubic-bezier(.22,1,.36,1) both;
+  transition:box-shadow 0.45s ease,border-color 0.35s ease;
 }
-.ws-dock-title{font-weight:700;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);margin-bottom:6px;}
-.ws-dock-section{display:flex;flex-direction:column;gap:6px;}
-.ws-dock-hint,.ws-dock-job{display:flex;align-items:center;flex-wrap:wrap;gap:6px;border-bottom:1px solid var(--rule);padding-bottom:6px;}
-.ws-dock-job:last-child{border-bottom:none;}
-.ws-hint-kind{text-transform:uppercase;font-size:9px;font-weight:700;color:#5E38A0;}
-.ws-hint-snip{flex:1;min-width:0;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.ws-hint-btn{font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--rule2);background:var(--paper);cursor:pointer;}
-.ws-hint-dismiss{background:none;border:none;cursor:pointer;color:var(--ink3);font-size:13px;}
-.ws-job-status{font-size:9px;font-weight:700;text-transform:uppercase;color:var(--ink3);}
-.ws-job-running{color:#A85F00;}
-.ws-job-done{color:#1A6835;}
-.ws-job-failed{color:var(--red);}
-.ws-job-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.ws-job-link{font-size:11px;}
-.ws-job-retry{font-size:10px;font-weight:600;padding:2px 6px;border-radius:5px;border:1px solid var(--rule);background:var(--paper);cursor:pointer;font-family:inherit;}
-.ws-job-retry:hover{border-color:rgba(194,71,71,.42);}
-.ws-job-err{color:var(--red);font-size:10px;width:100%;white-space:pre-wrap;word-break:break-word;max-height:8em;overflow-y:auto;}
+@keyframes wsDockFloat{from{opacity:0;transform:translateY(22px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+.ws-dock--live{border-color:rgba(26,148,91,.35);box-shadow:0 18px 52px rgba(26,104,53,.16),0 4px 14px rgba(26,104,53,.1);}
+.ws-dock-inner{
+  padding:12px 12px 10px;display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;
+}
+.ws-dock-head{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;flex-shrink:0;transition:margin-bottom 0.4s cubic-bezier(0.25, 0.9, 0.32, 1);}
+.ws-dock-head > .ws-dock-head-main{flex:1;min-width:0;}
+.ws-dock--minimized .ws-dock-head{align-items:center;margin-bottom:2px;}
+.ws-dock--minimized .ws-dock-head-mark{margin-top:0;}
+.ws-dock--minimized .ws-dock-inner{padding-bottom:10px;}
+
+/* Subtitle: animate out when minimized (paired with body collapse) */
+.ws-dock-tagline{
+  overflow:hidden;
+  font-size:10.5px;color:var(--ink3);line-height:1.45;margin-top:3px;margin-bottom:0;font-weight:400;
+  transition:opacity 0.4s cubic-bezier(0.25, 0.9, 0.32, 1),
+    max-height 0.52s cubic-bezier(0.25, 0.9, 0.32, 1),
+    margin 0.4s cubic-bezier(0.25, 0.9, 0.32, 1),
+    transform 0.45s cubic-bezier(0.25, 0.9, 0.32, 1);
+  max-height:64px;
+  transform-origin:top left;
+}
+.ws-dock--minimized .ws-dock-tagline{
+  opacity:0;max-height:0;margin-top:0;transform:translateY(-6px);pointer-events:none;
+}
+
+.ws-dock-collapse{
+  display:grid;grid-template-rows:1fr;min-height:0;flex:1 1 auto;
+  transition:grid-template-rows 0.52s cubic-bezier(0.25, 0.9, 0.32, 1);
+}
+.ws-dock--minimized .ws-dock-collapse{
+  grid-template-rows:0fr;
+  flex:0 0 auto;
+}
+.ws-dock-collapse-inn{
+  min-height:0;
+  opacity:1;
+  transform:translateY(0) translateZ(0);
+  transition:opacity 0.42s cubic-bezier(0.25, 0.9, 0.32, 1),
+    transform 0.52s cubic-bezier(0.25, 0.9, 0.32, 1);
+}
+.ws-dock:not(.ws-dock--minimized) .ws-dock-collapse-inn{
+  overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;
+}
+.ws-dock--minimized .ws-dock-collapse-inn{
+  overflow:hidden;pointer-events:none;opacity:0;transform:translateY(14px);
+}
+.ws-dock-mini{
+  flex-shrink:0;width:32px;height:32px;border-radius:10px;border:1px solid rgba(26,104,53,.28);
+  background:rgba(250,252,249,.95);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+  color:var(--ink2);transition:background .2s ease,border-color .2s ease,transform .38s cubic-bezier(0.25, 0.9, 0.32, 1);font-family:inherit;padding:0;margin:0;
+}
+.ws-dock-mini:hover{background:rgba(26,104,53,.1);border-color:rgba(26,104,53,.45);color:var(--ink);}
+.ws-dock-mini:active{transform:scale(.94);}
+.ws-dock-mini-ic{display:block;width:14px;height:14px;color:inherit;transition:transform 0.52s cubic-bezier(0.25, 0.9, 0.32, 1);}
+.ws-dock--minimized .ws-dock-mini-ic{transform:rotate(-180deg);}
+.ws-dock-head-mark{
+  width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:5px;
+  background:linear-gradient(142deg,#1A6835,#43b87a);
+  box-shadow:0 0 0 3px rgba(26,104,53,.12);
+  animation:wsLiveDot 2.4s ease-in-out infinite;
+}
+.ws-dock.ws-dock--idle .ws-dock-head-mark{animation:none;opacity:.45;}
+@keyframes wsLiveDot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.75;transform:scale(.92)}}
+.ws-dock-brand{font-size:13px;font-weight:800;letter-spacing:-.02em;color:var(--ink);line-height:1.2;}
+.ws-dock-badge{
+  padding:2px 8px;border-radius:999px;font-size:10px;font-weight:800;
+  background:rgba(26,104,53,.12);color:#1a5c32;border:1px solid rgba(26,104,53,.2);
+}
+.ws-dock-badge--pulse{
+  animation:wsDockBadgePing .95s cubic-bezier(.22,.62,.44,1) 1;
+}
+@keyframes wsDockBadgePing{
+  0%{box-shadow:0 0 0 0 rgba(26,104,53,.45);}
+  60%{box-shadow:0 0 0 9px rgba(26,104,53,0);}
+  100%{box-shadow:0 0 0 0 rgba(26,104,53,0);}
+}
+@media (prefers-reduced-motion:reduce){
+  .ws-dock-badge--pulse{animation:none!important;}
+}
+.ws-dock-head-trail{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0;}
+.ws-dock-section{margin-top:10px;}
+.ws-dock-section:first-of-type{margin-top:0;}
+.ws-dock-section-h{
+  font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);
+  display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px;
+}
+.ws-dock-section-n{font-size:10px;font-weight:800;padding:1px 7px;border-radius:999px;background:var(--paper);color:var(--ink2);}
+.ws-dock-hint{
+  display:flex;align-items:center;gap:10px;padding:11px 12px;margin-bottom:8px;
+  background:var(--page);border-radius:12px;border:1px solid var(--rule);box-shadow:0 1px 3px rgba(50,35,15,.05);
+  animation:wsRowIn .4s cubic-bezier(.22,1,.36,1) backwards;
+  transition:border-color .18s ease,box-shadow .22s ease;
+}
+.ws-dock-hint--calendar{border-color:rgba(13,110,140,.18);}
+.ws-dock-hint--meeting{border-color:rgba(26,74,170,.18);}
+.ws-dock-hint--assignment{border-color:rgba(94,56,160,.18);}
+.ws-dock-job{
+  display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:11px 12px;margin-bottom:8px;
+  background:var(--paper);border-radius:12px;border:1px solid rgba(26,104,53,.14);box-shadow:0 1px 2px rgba(50,35,15,.04);
+  animation:wsRowIn .4s cubic-bezier(.22,1,.36,1) backwards;
+  transition:border-color .18s ease,box-shadow .22s ease;
+}
+.ws-dock-hint:hover{border-color:rgba(94,56,160,.28);box-shadow:0 4px 14px rgba(94,56,160,.09);}
+.ws-dock-job:hover{border-color:rgba(26,104,53,.38);box-shadow:0 6px 18px rgba(26,104,53,.1);}
+.ws-dock-section > .ws-dock-hint:nth-of-type(2){animation-delay:.04s;}
+.ws-dock-section > .ws-dock-hint:nth-of-type(3){animation-delay:.08s;}
+.ws-dock-section > .ws-dock-hint:nth-of-type(4){animation-delay:.12s;}
+.ws-dock-section > .ws-dock-hint:nth-of-type(n+5){animation-delay:.14s;}
+@keyframes wsRowIn{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:translateX(0)}}
+.ws-hint-kind{display:inline-flex;align-items:center;gap:4px;text-transform:uppercase;font-size:8px;font-weight:800;letter-spacing:.06em;padding:2px 8px;border-radius:6px;flex-shrink:0;}
+.ws-hint-kind--calendar{color:#0f6e8a;background:rgba(13,110,140,.1);}
+.ws-hint-kind--meeting{color:#1A4AAA;background:rgba(26,74,170,.1);}
+.ws-hint-kind--assignment{color:#5E38A0;background:rgba(94,56,160,.1);}
+.ws-hint-kind--default{color:#5E38A0;background:rgba(94,56,160,.1);}
+.ws-hint-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.ws-hint-snip{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;font-weight:600;line-height:1.3;}
+.ws-hint-meta{font-size:10.5px;color:var(--ink3);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ws-hint-btn{
+  font-size:11px;font-weight:700;padding:6px 13px;border-radius:8px;border:none;
+  background:var(--green);color:#fff;cursor:pointer;font-family:inherit;
+  transition:opacity .15s,transform .12s,box-shadow .15s;
+  box-shadow:0 2px 6px rgba(26,104,53,.22);white-space:nowrap;flex-shrink:0;
+  letter-spacing:.01em;
+}
+.ws-hint-btn:hover{opacity:.88;transform:translateY(-1px);box-shadow:0 4px 10px rgba(26,104,53,.28);}
+.ws-hint-btn:active{transform:translateY(0);opacity:1;}
+.ws-hint-dismiss{
+  width:26px;height:26px;border-radius:8px;border:none;background:transparent;cursor:pointer;color:var(--ink3);
+  font-size:14px;line-height:1;transition:background .15s,color .15s;
+}
+.ws-hint-dismiss:hover{background:rgba(0,0,0,.06);color:var(--ink2);}
+.ws-job-status{
+  font-size:8.5px;font-weight:800;text-transform:uppercase;padding:2px 8px;border-radius:6px;letter-spacing:.04em;
+}
+.ws-job-running{color:#7a4a00;background:rgba(212,145,0,.2);}
+.ws-job-done{color:#14532a;background:rgba(26,104,53,.15);}
+.ws-job-failed{color:#a33;background:rgba(199,62,62,.12);}
+.ws-job-type{font-size:9px;font-weight:700;color:#0d6e8c;text-transform:uppercase;letter-spacing:.04em;}
+.ws-job-title{width:100%;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.35;font-weight:600;font-size:12px;}
+.ws-job-line1{display:flex;align-items:center;flex-wrap:wrap;gap:8px;width:100%;}
+.ws-job-line1 .ws-job-spacer{flex:1;min-width:4px;}
+.ws-job-link{font-size:11px;font-weight:700;padding:4px 10px;border-radius:8px;color:#0d6e8c;background:rgba(13,110,140,.1);text-decoration:none;}
+.ws-job-link:hover{background:rgba(13,110,140,.2);text-decoration:none;}
+.ws-job-retry{font-size:10px;font-weight:700;padding:4px 10px;border-radius:8px;border:1px solid rgba(199,62,62,.4);background:rgba(255,245,243,.95);cursor:pointer;font-family:inherit;color:#a22;}
+.ws-job-retry:hover{background:#fff;}
+.ws-job-err{color:var(--red);font-size:10px;width:100%;white-space:pre-wrap;word-break:break-word;max-height:8em;overflow-y:auto;padding:6px;border-radius:8px;background:rgba(199,62,62,.06);}
 .ws-modal-overlay{
-  position:fixed;inset:0;z-index:10040;background:rgba(30,22,12,.45);
+  position:fixed;inset:0;z-index:10040;
+  background:rgba(26,18,10,.52);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
   display:flex;align-items:center;justify-content:center;padding:16px;
+  animation:wsOverlayIn .18s ease;
 }
+@keyframes wsOverlayIn{from{opacity:0}to{opacity:1}}
 .ws-modal{
-  width:min(440px,100%);max-height:min(90vh,640px);overflow:auto;
-  background:var(--page);border:1px solid var(--rule2);border-radius:14px;
-  box-shadow:0 22px 56px rgba(0,0,0,.2);
+  width:min(460px,100%);max-height:min(88vh,660px);overflow:auto;
+  background:var(--page);border:1px solid rgba(220,210,196,.92);border-radius:16px;
+  box-shadow:0 4px 6px rgba(0,0,0,.06),0 24px 56px rgba(0,0,0,.22);
+  animation:cardRise .22s cubic-bezier(.22,1,.36,1);
 }
-.ws-modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--rule);}
-.ws-modal-title{font-weight:700;font-size:14px;}
-.ws-modal-body{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;}
-.ws-field{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--ink2);}
+.ws-modal-hdr{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 18px 12px;
+  background:linear-gradient(180deg,rgba(248,244,237,.9),transparent);
+  border-bottom:1px solid var(--rule);
+}
+.ws-modal-title{font-weight:780;font-size:15px;letter-spacing:-.015em;color:var(--ink);}
+.ws-modal-kicker{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);margin-bottom:2px;}
+.ws-modal-body{padding:16px 18px 18px;display:flex;flex-direction:column;gap:12px;}
+.ws-field{display:flex;flex-direction:column;gap:5px;font-size:11.5px;font-weight:600;color:var(--ink2);}
 .ws-field input,.ws-field textarea,.ws-field select{
-  font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--rule2);background:var(--paper);color:var(--ink);
+  font:inherit;padding:9px 11px;border-radius:9px;border:1px solid var(--rule2);
+  background:var(--paper);color:var(--ink);outline:none;
+  transition:border-color .18s,box-shadow .18s;
+  font-size:13px;font-weight:400;
 }
+.ws-field input:focus,.ws-field textarea:focus,.ws-field select:focus{
+  border-color:rgba(26,104,53,.45);box-shadow:0 0 0 3px rgba(26,104,53,.08);
+}
+.ws-field-hint{font-size:10.5px;color:var(--ink3);font-weight:400;line-height:1.4;margin-top:1px;}
+.ws-modal-source-quote{
+  display:flex;gap:8px;align-items:flex-start;
+  padding:10px 12px;margin-bottom:2px;
+  background:rgba(248,244,237,.8);border:1px solid rgba(215,204,188,.8);
+  border-radius:10px;
+}
+.ws-modal-source-quote-bar{width:3px;border-radius:2px;background:rgba(94,56,160,.45);flex-shrink:0;min-height:16px;align-self:stretch;}
+.ws-modal-source-quote-text{font-size:11px;color:var(--ink3);line-height:1.5;font-style:italic;flex:1;}
+.ws-modal-source-lbl{font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--ink3);opacity:.7;display:block;margin-bottom:3px;}
 .ws-modal-quote{font-size:11px;color:var(--ink3);border-left:3px solid rgba(94,56,160,.35);padding:6px 10px;background:var(--paper);border-radius:0 8px 8px 0;line-height:1.45;}
-.ws-modal-disc{font-size:11.5px;color:var(--ink2);line-height:1.5;}
-.ws-modal-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;}
-.ws-modal-send-err{margin:8px 0 0;line-height:1.35;}
+.ws-modal-disc{
+  font-size:11.5px;color:var(--ink2);line-height:1.55;
+  padding:10px 12px;background:rgba(255,243,200,.6);border:1px solid rgba(200,165,80,.3);
+  border-radius:9px;
+}
+.ws-modal-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;}
+.ws-modal-send-err{margin:6px 0 0;line-height:1.35;}
 
 @media (prefers-reduced-motion: reduce){
   .ws-agent-rail .ws-agent-rail-track{animation:none!important;opacity:.85;}
+  .hdr-ws-act-badge{animation:none!important;}
+  .hdr-ws-act-panel,.ws-dock,.ws-dock-status{animation:none!important;}
+  .ws-dock,
+  .ws-dock-collapse,
+  .ws-dock-collapse-inn,
+  .ws-dock-tagline,
+  .ws-dock-mini,
+  .ws-dock-mini-ic{transition-duration:0.01ms!important;}
   .hdr-ws-btn.ws-agent-soft,.hdr-ws-btn.ws-agent-intense{animation:none!important;}
   .hdr-ws-pip.vis{animation:none!important;}
-  .ws-mini-dots i{animation:none!important;opacity:.75;}
+  .ws-mini-dots i,.ws-dock-head-mark,.ws-dock-hint,.ws-dock-job{animation:none!important;}
+  .ws-dock--minimized .ws-dock-collapse-inn{opacity:0;transform:none;}
 }
 
 ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:var(--rule2);border-radius:10px;}
@@ -2499,6 +2994,114 @@ const PROVIDERS = [
   { id: "claude", name: "Claude", placeholder: "sk-ant-...", keyPrefix: "sk-ant-", url: "https://console.anthropic.com/settings/keys" },
   { id: "gemini", name: "Gemini", placeholder: "AIza...", keyPrefix: "AIza", url: "https://aistudio.google.com/apikey" },
 ];
+
+/** Human-readable Workspace job line (dock + Agents). */
+/** Convert an ISO datetime string to a value suitable for a datetime-local input (truncates seconds/tz) */
+function isoToDatetimeLocal(iso) {
+  if (!iso) return "";
+  const s = String(iso).trim();
+  // Extract YYYY-MM-DDTHH:MM
+  const m = s.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})/);
+  return m ? m[1] : "";
+}
+
+/** Convert a datetime-local input value back to an ISO string with seconds */
+function datetimeLocalToIso(val) {
+  if (!val) return "";
+  const s = String(val).trim();
+  if (s.length === 16) return s + ":00";
+  return s;
+}
+
+/** Format a workspace hint kind into icon + human label for the dock card */
+function wsHintKindLabel(kind) {
+  if (kind === "calendar") return { icon: "📅", label: "Calendar event", cls: "ws-hint-kind--calendar" };
+  if (kind === "meeting")  return { icon: "👥", label: "Meeting invite", cls: "ws-hint-kind--meeting" };
+  if (kind === "assignment") return { icon: "✏", label: "Draft", cls: "ws-hint-kind--assignment" };
+  return { icon: "◈", label: String(kind || "item"), cls: "ws-hint-kind--default" };
+}
+
+/** Return a short date/time preview string from a hint data object */
+function wsHintDateMeta(h) {
+  const iso = h.data?.startIso || h.data?.dueIso;
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    const now = new Date();
+    const diffDays = Math.round((d - now) / 86400000);
+    const timeStr = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const dateStr = d.toLocaleDateString([], { month: "short", day: "numeric" });
+    if (diffDays === 0) return `Today · ${timeStr}`;
+    if (diffDays === 1) return `Tomorrow · ${timeStr}`;
+    if (diffDays === -1) return `Yesterday · ${timeStr}`;
+    if (diffDays > 1 && diffDays < 7) return `${d.toLocaleDateString([], { weekday: "short" })} · ${timeStr}`;
+    return `${dateStr} · ${timeStr}`;
+  } catch { return ""; }
+}
+
+/** Return a short deliverable type label for assignment hints */
+function wsHintAssignMeta(h) {
+  const t = h.data?.deliverableType;
+  if (t === "sheet") return "Google Sheet";
+  if (t === "email_draft") return "Gmail draft";
+  return "Google Doc";
+}
+
+function workspaceDeliverableLine(j) {
+  if (!j || typeof j !== "object") return "Workspace task";
+  const ty = String(j.type || "").toLowerCase();
+  if (ty === "calendar") return "Calendar event";
+  if (ty === "meeting") return "Meeting invite";
+  if (ty === "assignment") {
+    const dt = String(j.payload?.deliverableType || "doc").toLowerCase();
+    if (dt === "sheet") return "Spreadsheet draft";
+    if (dt === "email_draft") return "Email draft";
+    return "Doc draft";
+  }
+  return "Workspace task";
+}
+
+function workspaceJobGlyph(j) {
+  if (!j || typeof j !== "object") return "✨";
+  const ty = String(j.type || "").toLowerCase();
+  if (ty === "calendar") return "📅";
+  if (ty === "meeting") return "📨";
+  if (ty === "assignment") {
+    const dt = String(j.payload?.deliverableType || "doc").toLowerCase();
+    if (dt === "sheet") return "📊";
+    if (dt === "email_draft") return "📧";
+    return "📄";
+  }
+  return "✨";
+}
+
+function formatWorkspaceRelativeTime(ts) {
+  if (!ts || typeof ts !== "number" || !Number.isFinite(ts)) return "";
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 45) return "just now";
+  if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m ago`;
+  if (s < 86400) return `${Math.max(1, Math.floor(s / 3600))}h ago`;
+  if (s < 604800) return `${Math.max(1, Math.floor(s / 86400))}d ago`;
+  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function workspaceJobPrimaryTitle(j) {
+  if (!j || typeof j !== "object") return "";
+  const t = j.title || j.payload?.title || j.payload?.summary || j.step || j.jobId || "";
+  return String(t).trim();
+}
+
+/** @param {"all"|"active"|"done"|"failed"} tab */
+function agentsPanelEmptyCopy(tab, totalCount) {
+  if (totalCount === 0) {
+    return "No runs logged yet. Approve a hint from the Workspace card or start a Calendar / draft job — finished work shows up here with an Open link.";
+  }
+  if (tab === "active") return "Nothing queued or running. When SunnyD is writing to Google, progress appears here.";
+  if (tab === "done") return "No matches in this tab. Try All to browse everything you have shipped.";
+  if (tab === "failed") return "No failures to show. Errors from Google show up here when they happen.";
+  return "";
+}
 
 /* ─── Toolbar ────────────────────────────────────────────────────────────── */
 function Toolbar({ editor }) {
@@ -3126,6 +3729,13 @@ export default function SunnyDNotes() {
   const [workspaceExpand, setWorkspaceExpand] = useState(false);
   const [workspaceOAuthErr, setWorkspaceOAuthErr] = useState("");
   const [wsActivityOpen, setWsActivityOpen] = useState(false);
+  const [wsAgentsTab, setWsAgentsTab] = useState("all"); // all | active | done | failed
+  const [wsDockMinimized, setWsDockMinimized] = useState(() => {
+    try {
+      const v = sessionStorage.getItem(LS_WS_DOCK_MIN);
+      return v === null ? true : v === "1"; // Default minimized for new users
+    } catch { return true; }
+  });
   const [wsScanHintMsg, setWsScanHintMsg] = useState(null);
   const [wsSuccessMsg, setWsSuccessMsg] = useState(null);
 
@@ -3134,6 +3744,7 @@ export default function SunnyDNotes() {
   const [workspaceJobs, setWorkspaceJobs] = useState([]);
   /** User paused typing — workspace scan fires after delay */
   const [wsScanScheduled, setWsScanScheduled] = useState(false);
+  const [wsDockPulse, setWsDockPulse] = useState(false);
   /** LLM is extracting Workspace candidates from note text */
   const [wsAnalyzing, setWsAnalyzing] = useState(false);
   const workspaceBusy = useRef(false);
@@ -3158,6 +3769,48 @@ export default function SunnyDNotes() {
   }, [workspaceEnabled, wsConnected, wsAnalyzing, wsBgJobsActive, wsScanScheduled]);
 
   const wsAgentLive = !!(workspaceEnabled && wsConnected && (wsScanScheduled || wsAnalyzing || wsBgJobsActive));
+
+  const wsAttentionCount = useMemo(() => {
+    const hintN = wsHints.length;
+    const busyN = workspaceJobs.filter(x => x.status === "queued" || x.status === "running").length;
+    return hintN + busyN;
+  }, [wsHints.length, workspaceJobs]);
+
+  const wsAgentsCounts = useMemo(() => {
+    const active = workspaceJobs.filter(j => j.status === "queued" || j.status === "running").length;
+    const done = workspaceJobs.filter(j => j.status === "done").length;
+    const failed = workspaceJobs.filter(j => j.status === "failed").length;
+    return { active, done, failed, total: workspaceJobs.length };
+  }, [workspaceJobs]);
+
+  const wsAgentsFilteredJobs = useMemo(() => {
+    const raw = workspaceJobs.slice(0, 60);
+    if (wsAgentsTab === "active") return raw.filter(j => j.status === "queued" || j.status === "running");
+    if (wsAgentsTab === "done") return raw.filter(j => j.status === "done");
+    if (wsAgentsTab === "failed") return raw.filter(j => j.status === "failed");
+    return raw;
+  }, [workspaceJobs, wsAgentsTab]);
+
+  const wsDockSubtitle = useMemo(() => {
+    if (!workspaceEnabled) return "Turn on Google integrations in the header or under G.";
+    if (!wsConnected) return "Connect Google to run agents.";
+    if (wsAnalyzing) return "Reading your note with AI — nothing is sent until you verify.";
+    if (wsBgJobsActive) return "Building files in your Google account — keep this tab open.";
+    if (wsScanScheduled) return `Typing paused — scanning in ~10s (notes need ${WORKSPACE_SCAN_MIN_PLAIN_CHARS}+ characters).`;
+    if (wsHints.length)
+      return `${wsHints.length} suggestion${wsHints.length === 1 ? "" : "s"} from your note — tap Verify.`;
+    const failed = workspaceJobs.filter(x => x.status === "failed").length;
+    if (failed) return `${failed} task${failed === 1 ? "" : "s"} need a retry.`;
+    return "You're caught up. Keep writing — agents watch for dates, drafts, and meetings.";
+  }, [
+    workspaceEnabled,
+    wsConnected,
+    wsAnalyzing,
+    wsBgJobsActive,
+    wsScanScheduled,
+    wsHints.length,
+    workspaceJobs,
+  ]);
 
   const syncPodcastSpeakerFromAudio = useCallback(() => {
     const el = podcastAudioRef.current;
@@ -3370,11 +4023,25 @@ export default function SunnyDNotes() {
 
   useEffect(() => {
     if (!workspaceEnabled || !wsConnected) return undefined;
-    const load = () => listJobs(20).then(j => setWorkspaceJobs(j)).catch(() => {});
+    const load = () => listJobs(50).then(j => setWorkspaceJobs(j)).catch(() => {});
     load();
     const id = setInterval(load, 4000);
     return () => clearInterval(id);
   }, [workspaceEnabled, wsConnected]);
+
+  useEffect(() => {
+    if (!wsActivityOpen) return undefined;
+    const onKey = e => {
+      if (e.key !== "Escape") return;
+      const a = document.activeElement;
+      if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")) return;
+      if (a?.isContentEditable) return;
+      e.preventDefault();
+      setWsActivityOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [wsActivityOpen]);
 
   useEffect(() => {
     if (!workspaceEnabled || !wsConnected || !apiKey?.trim()) return undefined;
@@ -4563,11 +5230,40 @@ ${focusNew}`,
   }
 
   /* ── Google Workspace: scan note for calendar / assignments / invites ── */
-  async function runWorkspaceScan(noteId, plainText, metaNote) {
-    if (!workspaceEnabled || workspaceBusy.current) return;
-    if (!wsConnected || !apiKey?.trim()) return;
-    if (!getGoogleClientId()) return;
-    if (plainText.length < 100) return;
+  async function runWorkspaceScan(noteId, verificationPlain, metaNote, opts = {}) {
+    const manual = !!opts.manual;
+    const plainTextForLlm = opts.plainTextForLlm ?? verificationPlain;
+    const verifyPlain = verificationPlain;
+
+    if (!workspaceEnabled) {
+      if (manual) setWsScanHintMsg("Enable Workspace automation using the toggle in the G menu first.");
+      return;
+    }
+    if (!wsConnected) {
+      if (manual) setWsScanHintMsg("Connect your Google account first — open the G menu and click Connect Google.");
+      return;
+    }
+    if (!apiKey?.trim()) {
+      if (manual) setWsScanHintMsg("Add an AI provider API key in the header bar to enable scanning.");
+      return;
+    }
+    if (!getGoogleClientId()) {
+      if (manual) setWsScanHintMsg("This build is missing a Google OAuth client ID — set VITE_GOOGLE_CLIENT_ID before building.");
+      return;
+    }
+    if (workspaceBusy.current) {
+      if (manual) setWsScanHintMsg("A scan is already running — wait a moment and try again.");
+      return;
+    }
+    const trimLen = (verifyPlain || "").trim().length;
+    if (trimLen < WORKSPACE_SCAN_MIN_PLAIN_CHARS) {
+      if (manual) {
+        setWsScanHintMsg(
+          `Write at least ${WORKSPACE_SCAN_MIN_PLAIN_CHARS} characters in this note before scanning — add a date, task, or meeting detail to give the agent something to work with.`,
+        );
+      }
+      return;
+    }
     workspaceBusy.current = true;
     setWsAnalyzing(true);
     setWsScanHintMsg(null);
@@ -4578,7 +5274,7 @@ ${focusNew}`,
       const parsed = await analyzeWorkspaceContent(
         wsAi,
         metaNote?.title || "Untitled",
-        plainText,
+        plainTextForLlm,
         noteMetaBlock(metaNote),
         ledger,
       );
@@ -4591,7 +5287,7 @@ ${focusNew}`,
         if (!data || (data.confidence ?? 0) < 0.85) return;
         const q = (data.sourceQuote || "").trim();
         if (q.length < 10) return;
-        if (!plainTextMatchesSourceQuote(plainText, q)) {
+        if (!plainTextMatchesSourceQuote(verifyPlain, q)) {
           skippedDueToQuote = true;
           return;
         }
@@ -4608,25 +5304,40 @@ ${focusNew}`,
         await maybePush("calendar", parsed.calendar, parsed.calendar?.startIso);
       }
 
-      if (wsAssign && parsed.assignment?.confidence >= 0.85) {
-        const a = parsed.assignment;
-        const dt = ["doc", "sheet", "email_draft"].includes(a.deliverableType) ? a.deliverableType : "doc";
-        const enriched = {
-          ...a,
-          deliverableType: dt,
-        };
-        await maybePush("assignment", enriched, a.dueIso);
+      if (wsAssign && Array.isArray(parsed.assignments)) {
+        for (const a of parsed.assignments) {
+          if ((a.confidence ?? 0) < 0.85) continue;
+          const dt = ["doc", "sheet", "email_draft"].includes(a.deliverableType) ? a.deliverableType : "doc";
+          const enriched = { ...a, deliverableType: dt };
+          await maybePush("assignment", enriched, a.dueIso);
+        }
       }
 
-      lastWorkspacePlain.current[noteId] = plainText;
+      lastWorkspacePlain.current[noteId] = plainTextForLlm;
 
       if (!batch.length) {
         if (skippedDueToQuote) {
           setWsScanHintMsg(
-            "Workspace drafted a calendar/meeting/draft suggestion, but the model’s quoted line didn’t match your saved note text. Try one plain sentence with the date and time (e.g. “Exam May 15 2026 2pm”), pause ~10s, or check G toggles.",
+            "SunnyD found a possible event or draft, but couldn\u2019t verify the exact phrase in your note. Try writing the date and action as one clear sentence \u2014 for example \u201cExam on May 15 at 2pm\u201d \u2014 then pause 10 seconds or tap \u201cScan note\u201d again.",
+          );
+        } else if (manual) {
+          const off = [];
+          if (!wsInvites) off.push("Meeting invites");
+          if (!wsCal) off.push("Calendar");
+          if (!wsAssign) off.push("Assignments / drafts");
+          const toggleLine =
+            off.length > 0
+              ? `${off.join(", ")} ${off.length === 1 ? "is" : "are"} turned off in G settings \u2014 enable ${off.length === 1 ? "it" : "them"} to detect those. `
+              : "";
+          setWsScanHintMsg(
+            `${toggleLine}Nothing detected with high confidence. Write each calendar event, meeting, or draft request as its own clear sentence with a specific date or deadline.`,
           );
         }
         return;
+      }
+      if (batch.length > 0) {
+        setWsDockPulse(true);
+        window.setTimeout(() => setWsDockPulse(false), 1400);
       }
       setWsHints(prev => {
         const ids = new Set(prev.map(h => h.id));
@@ -4647,7 +5358,84 @@ ${focusNew}`,
     }
   }
 
-  /* ── Ghost completion: only when mid-thought, never after a complete sentence ── */
+  /** Deploy Workspace extraction from current selection + lecture context (selection toolbar). */
+  async function deployAgentsFromSelection(menu) {
+    if (!menu?.text?.trim()) return;
+    if (!workspaceEnabled) {
+      setWsScanHintMsg("Enable Workspace automation in the G menu first.");
+      return;
+    }
+    if (!wsConnected || !apiKey?.trim() || !getGoogleClientId()) {
+      setWsScanHintMsg(wsConnected ? "Add your AI provider API key in the header bar." : "Connect your Google account first via the G menu.");
+      return;
+    }
+    const sxRaw = typeof menu.start === "number" && menu.start >= 0 ? menu.start : content.indexOf(menu.text);
+    const syRaw =
+      typeof menu.end === "number" && menu.end > (sxRaw >= 0 ? sxRaw : 0)
+        ? menu.end
+        : sxRaw >= 0
+          ? sxRaw + menu.text.length
+          : -1;
+    let sx = sxRaw >= 0 ? sxRaw : 0;
+    let ex = syRaw >= 0 ? syRaw : 0;
+    if ((syRaw ?? 0) <= sxRaw && menu.text?.trim()) {
+      const ix = content.indexOf(menu.text);
+      if (ix >= 0) {
+        sx = ix;
+        ex = ix + menu.text.length;
+      }
+    }
+    const bundle = buildSelectionAgentBundle({
+      notePlain: content,
+      selStart: sx,
+      selEnd: ex,
+      highlightText: menu.text,
+      finalTranscript: finalTranscript || "",
+      interimTranscript: interimTranscript || "",
+      lectureOn,
+    });
+    clearTimeout(timers.current.s);
+    clearTimeout(timers.current.f);
+    clearTimeout(timers.current.ws);
+    setWsScanScheduled(false);
+    setSelMenu(null);
+    setSelThinking({ action: "agents", x: menu.x, y: menu.y, below: menu.below });
+    try {
+      await runWorkspaceScan(activeId, bundle.verificationPlain, note, {
+        manual: true,
+        plainTextForLlm: bundle.llmNoteText,
+      });
+    } finally {
+      setSelThinking(null);
+    }
+  }
+
+  /** Turn recent lecture transcript into Workspace hints (footer action). */
+  async function deployLectureAgents() {
+    const ft = (finalTranscript || "").trim();
+    if (ft.length < 80) {
+      setWsScanHintMsg("Record a bit more of the lecture first — at least a sentence or two — then try Scan with Agents again.");
+      return;
+    }
+    if (!workspaceEnabled) {
+      setWsScanHintMsg("Enable Workspace automation in the G menu first.");
+      return;
+    }
+    if (!wsConnected || !apiKey?.trim() || !getGoogleClientId()) {
+      setWsScanHintMsg(wsConnected ? "Add your AI provider API key in the header bar." : "Connect your Google account first via the G menu.");
+      return;
+    }
+    const bundle = buildLectureOnlyAgentBundle({
+      notePlain: content,
+      finalTranscript: finalTranscript || "",
+      interimTranscript: interimTranscript || "",
+      lectureOn,
+    });
+    await runWorkspaceScan(activeId, bundle.verificationPlain, note, {
+      manual: true,
+      plainTextForLlm: bundle.llmNoteText,
+    });
+  }
   async function runGhost(text, cur) {
     if (ghostBusy.current) return;
     // Only complete when cursor is at the end of the text
@@ -4720,7 +5508,7 @@ If the fragment could already be a complete sentence (they may have just forgott
           await runWorkspaceScan(snapId, text, metaNote || note);
         })();
       }, 10000);
-      if (text.trim().length >= 100) setWsScanScheduled(true);
+      if (text.trim().length >= WORKSPACE_SCAN_MIN_PLAIN_CHARS) setWsScanScheduled(true);
     }
   }, [activeId, dockedCard, notes, suggestionsOn, workspaceEnabled, wsConnected, apiKey, note, wsCal, wsAssign, wsInvites]);
 
@@ -4746,8 +5534,14 @@ If the fragment could already be a complete sentence (they may have just forgott
     setTimeout(() => {
       const selectedText = (editorRef.current?.getSelection() || "").trim();
       if (!selectedText) { setSelMenu(null); return; }
-      const start = content.indexOf(selectedText);
-      const end = start !== -1 ? start + selectedText.length : -1;
+      let start = content.indexOf(selectedText);
+      let end;
+      if (start < 0) {
+        start = 0;
+        end = 0;
+      } else {
+        end = start + selectedText.length;
+      }
       // Use the actual selection rect for precise positioning; fall back to mouse pos
       const rect = editorRef.current?.getSelectionRect() || null;
       const fmt  = editorRef.current?.getFormatState()    || {};
@@ -4762,14 +5556,29 @@ If the fragment could already be a complete sentence (they may have just forgott
 
   const handleSelAction = async action => {
     if (!selMenu) return;
+    const { text: t, start: selStart, end: selEnd, x, y, below } = selMenu;
     busyWithSelAction.current = true;
     clearTimeout(timers.current.s);
     clearTimeout(timers.current.f);
     clearTimeout(timers.current.ws);
     setWsScanScheduled(false);
     const noteTitle = note?.title || "Untitled";
-    const ctxBefore = content.slice(Math.max(0, start - 300), start);
-    const ctxAfter  = content.slice(end, Math.min(content.length, end + 300));
+    const LOCAL = 720;
+    let start = selStart;
+    let end = selEnd;
+    if (end <= start && t) {
+      const idx = content.indexOf(t);
+      if (idx >= 0) {
+        start = idx;
+        end = idx + t.length;
+      }
+    }
+    const ctxBefore = content.slice(Math.max(0, start - LOCAL), start);
+    const ctxAfter = content.slice(end, Math.min(content.length, end + LOCAL));
+    const lecHint = ((finalTranscript || "").trim().slice(-1800)).trim();
+    const lecExtra = lecHint
+      ? `\n\nRelated lecture transcript (recent, for grounding — prioritize note text if conflict):\n"""${lecHint}"""${lectureOn ? "\n(Lecture recording active.)" : ""}`
+      : "";
     // Show thinking pill at same spot as toolbar, then hide toolbar
     setSelMenu(null);
     setSelThinking({ action, x, y, below });
@@ -4806,7 +5615,7 @@ Selected text:
 "${t}"
 
 Context after selection:
-"${ctxAfter}"`;
+"${ctxAfter}"${lecExtra}`;
 
     try {
       const raw = await ai(llmProvider, apiKey, sysPrompts[action], userMsg, 900);
@@ -4966,12 +5775,13 @@ Return the rewritten passage only:`;
   };
 
   const weaveSelResult = () => {
-    if (!selRes) return;
+    if (!selRes || selRes.isError || selRes.text == null) return;
+    const { text: outText, op, original } = selRes;
     clearTimeout(timers.current.s);
     clearTimeout(timers.current.f);
     clearTimeout(timers.current.ws);
     setWsScanScheduled(false);
-    const html = mdToHtml(text);
+    const html = mdToHtml(outText);
     // Use Tiptap surgical methods — never slice plain-text (that destroys HTML formatting)
     if (op === "replace") {
       editorRef.current?.findAndReplaceText(original, html);
@@ -4984,7 +5794,7 @@ Return the rewritten passage only:`;
       editorRef.current?.findAndReplaceText(original, html || "");
     }
     // Flash the applied text so user can see exactly what changed
-    setTimeout(() => editorRef.current?.setInsertedHighlight(text.slice(0, 60).trim()), 120);
+    setTimeout(() => editorRef.current?.setInsertedHighlight(outText.slice(0, 60).trim()), 120);
     setSelRes(null);
     lastScannedContent.current[activeId] = "";
     if (suggestionsOn) {
@@ -5226,7 +6036,7 @@ Return the rewritten passage only:`;
     return pa - pb;
   });
 
-  const SUGG_CARD_H = 44;
+  const SUGG_CARD_H = 66; // min-height 44px + typical headline ~22px
   const SUGG_GAP = 8;
   const MIN_SPACING = SUGG_CARD_H + SUGG_GAP;
 
@@ -5381,15 +6191,15 @@ Return the rewritten passage only:`;
       if (href && workspaceInsertLinkRef.current && noteIdHint) {
         appendDraftLinkToNoteFor(noteIdHint, href, j.title || "Draft");
       }
-      setWorkspaceJobs(await listJobs(20));
+      setWorkspaceJobs(await listJobs(50));
     } catch {
-      void listJobs(20).then(setWorkspaceJobs);
+      void listJobs(50).then(setWorkspaceJobs);
     }
   }
 
   assignmentDrainHooksRef.current = {
     onJobDone: ({ job, jobMeta }) => void finalizeAssignmentJobUI(job, jobMeta?.noteId),
-    onJobFailed: () => void listJobs(20).then(setWorkspaceJobs),
+    onJobFailed: () => void listJobs(50).then(setWorkspaceJobs),
   };
 
   async function retryWorkspaceAssignmentJob(jobId) {
@@ -5402,7 +6212,7 @@ Return the rewritten passage only:`;
       (s, u, m) => wsAiRef.current(s, u, m),
       assignmentDrainHooksRef.current,
     );
-    void listJobs(20).then(setWorkspaceJobs).catch(() => {});
+    void listJobs(50).then(setWorkspaceJobs).catch(() => {});
   }
 
 
@@ -5476,8 +6286,8 @@ Return the rewritten passage only:`;
         setWsModal(null);
         setWsSuccessMsg(
           form.kind === "meeting"
-            ? "Meeting invite sent — open Agents in the toolbar to open the Calendar event."
-            : "Calendar event saved — open Agents in the toolbar to open it in Google Calendar.",
+            ? "Meeting invite sent \u2014 open the Agents panel to view it in Google Calendar."
+            : "Event added to your Google Calendar \u2014 open the Agents panel to view it.",
         );
         return;
       }
@@ -5503,7 +6313,7 @@ Return the rewritten passage only:`;
           (s, u, m) => wsAiRef.current(s, u, m),
           assignmentDrainHooksRef.current,
         ).then(async () => {
-          setWorkspaceJobs(await listJobs(20));
+          setWorkspaceJobs(await listJobs(50));
           try {
             const failed = await getJob(jobId);
             if (failed?.status === "failed" && failed?.error) setWorkspaceOAuthErr(String(failed.error));
@@ -5544,324 +6354,486 @@ Return the rewritten passage only:`;
       <div className="app" onClick={() => { setSelMenu(null); setExportOpen(false); setWorkspaceExpand(false); setWsActivityOpen(false); }}>
 
         {/* Header */}
-        <header className="hdr">
-          <div className="logo">
-            <div className="logo-sq">S</div>
-            <span className="logo-name">SunnyD</span>
-            <div className="logo-sep" />
-            <span className="logo-tag">Intelligent Notes</span>
-          </div>
-          <div className={`hdr-pill${busy ? " live" : ""}`}>
-            <div className="hdr-dot" />
-            <span>{busy ? statusTxt : "Ready"}</span>
-          </div>
-          <div className="hdr-r">
-            {browserSupportsSpeechRecognition && (
-              <>
+        <header className="hdr hdr-shell">
+          <div className="hdr-row hdr-row-main">
+            <div className="hdr-left">
+              <div className="logo">
+                <div className="logo-sq">S</div>
+                <span className="logo-name">SunnyD</span>
+                <div className="logo-sep" aria-hidden />
+                <span className="logo-tag">Intelligent Notes</span>
+              </div>
+            </div>
+            <div className="hdr-mid" aria-label="This note">
+              <div className={`hdr-pill${busy ? " live" : ""}`}>
+                <div className="hdr-dot" aria-hidden />
+                <span>{busy ? statusTxt : "Ready"}</span>
+              </div>
+              {browserSupportsSpeechRecognition && (
                 <button
+                  type="button"
                   className={`lecture-btn${lectureOn ? " on" : ""}`}
                   onClick={() => setLectureOn(p => !p)}
                   title={lectureOn ? "Stop live transcription" : "Start live transcription"}
                 >
-                  {lectureOn && listening && !lecturePaused
-                    ? <span className="lecture-rec-dot" style={{ width: 7, height: 7 }} />
-                    : <span className="lecture-btn-ic">◉</span>}
+                  {lectureOn && listening && !lecturePaused ? (
+                    <span className="lecture-rec-dot" style={{ width: 7, height: 7 }} />
+                  ) : (
+                    <span className="lecture-btn-ic">◉</span>
+                  )}
                   <span>{lectureOn ? (lecturePaused ? "Paused" : "Recording") : "Lecture"}</span>
                 </button>
-                <span className="hdr-sep" />
-              </>
-            )}
-            <span className="hdr-wc">{wc} words</span>
-            {getGoogleClientId() && (
-              <span
-                className="hdr-google-toggle"
-                title={
-                  workspaceEnabled
-                    ? "Google Calendar, Workspace drafts & meeting helpers are enabled (matches Enable automation under G)"
-                    : "Turn on to scan notes for calendar, drafts & meetings after you connect Google"
-                }
-                onClick={e => e.stopPropagation()}
-              >
-                <span className="hdr-google-toggle-lbl" id="hdr-google-toggle-lbl">Google</span>
+              )}
+            </div>
+            <div className="hdr-right">
+              <div className="hdr-cluster hdr-cluster-integrations">
                 <button
                   type="button"
-                  id="hdr-google-switch"
-                  className={`hdr-google-sw${workspaceEnabled ? " hdr-google-sw-on" : ""}`}
-                  role="switch"
-                  aria-checked={workspaceEnabled}
-                  aria-labelledby="hdr-google-toggle-lbl"
-                  onClick={() => {
-                    const v = !workspaceEnabled;
-                    clearTimeout(timers.current.ws);
-                    setWsScanScheduled(false);
-                    setWsScanHintMsg(null);
-                    setWsSuccessMsg(null);
-                    setWorkspaceEnabled(v);
-                    try { sessionStorage.setItem(LS_WS_MASTER, v ? "1" : "0"); } catch {}
-                    if (!v) setWorkspaceExpand(false);
-                  }}
-                />
-              </span>
-            )}
-            <button
-              type="button"
-              className="hdr-podcast-btn"
-              title="SunnyD Cast — podcast replay from your notes"
-              onClick={e => {
-                e.stopPropagation();
-                setExportOpen(false);
-                setWorkspaceExpand(false);
-                setPodcastMinimized(false);
-                setPodcastOpen(true);
-                try {
-                  if (typeof speechSynthesis !== "undefined") speechSynthesis.getVoices();
-                } catch {}
-              }}
-            >
-              ☀️ SunnyD Cast
-            </button>
-            {workspaceEnabled && getGoogleClientId() && (
-              <div className="hdr-ws-act-wrap" onClick={e => e.stopPropagation()}>
-                <button
-                  type="button"
-                  className="hdr-ws-act-btn"
-                  title="Workspace drafts & agent activity"
-                  onClick={() => {
+                  className="hdr-podcast-btn"
+                  title="SunnyD Cast — podcast-style playback from your notes"
+                  onClick={e => {
+                    e.stopPropagation();
                     setExportOpen(false);
-                    setWsActivityOpen(o => !o);
+                    setWorkspaceExpand(false);
+                    setPodcastMinimized(false);
+                    setPodcastOpen(true);
+                    try {
+                      if (typeof speechSynthesis !== "undefined") speechSynthesis.getVoices();
+                    } catch {}
                   }}
                 >
-                  Agents
+                  ☀ Cast
                 </button>
-                {wsActivityOpen && (
-                  <div className="hdr-ws-act-panel" role="region" aria-label="Workspace agents">
-                    <div className="hdr-ws-act-ph">Workspace drafts</div>
-                    {workspaceJobs.length === 0 && (
-                      <div className="hdr-ws-act-empty">No draft jobs yet. Create drafts from Workspace hints.</div>
-                    )}
-                    <ul className="hdr-ws-act-list">
-                      {workspaceJobs.slice(0, 24).map(j => (
-                        <li key={j.jobId} className="hdr-ws-act-row">
-                          <span className={`hdr-ws-act-st hdr-ws-st-${String(j.status || "").replace(/\s+/g, "-")}`}>
-                            {j.status || "—"}
-                          </span>
-                          <span
-                            className="hdr-ws-act-title"
-                            title={String(j.step || j.title || j.jobId || "")}
-                          >
-                            {String(j.step || j.title || j.jobId || "")
-                              .slice(0, 70)}
-                            {(String(j.step || j.title || j.jobId || "").length > 70 ? "…" : "")}
-                          </span>
-                          {j.webViewLink ? (
-                            <a className="hdr-ws-act-link" href={j.webViewLink} target="_blank" rel="noopener noreferrer">
-                              Open
-                            </a>
-                          ) : (
-                            <span />
-                          )}
-                          {(j.status === "failed") && (
-                            <button type="button" className="hdr-ws-act-retry" onClick={() => retryWorkspaceAssignmentJob(j.jobId)}>
-                              Retry
+                {workspaceEnabled && getGoogleClientId() && (wsAttentionCount > 0 || workspaceJobs.length > 0) && (
+                  <div className="hdr-ws-act-wrap" onClick={e => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className={`hdr-ws-act-btn${wsAttentionCount ? " hdr-ws-act-btn--live" : ""}`}
+                      title={
+                        wsAttentionCount > 0
+                          ? `Workspace activity — ${wsAttentionCount} item${wsAttentionCount === 1 ? "" : "s"} queued or need review`
+                          : "Workspace runs & Google activity"
+                      }
+                      onClick={() => {
+                        setExportOpen(false);
+                        setWsActivityOpen(o => {
+                          const next = !o;
+                          if (next) setWsAgentsTab("all");
+                          return next;
+                        });
+                      }}
+                    >
+                      Agents
+                      {wsAttentionCount > 0 ? (
+                        <span className="hdr-ws-act-badge" aria-hidden>{wsAttentionCount > 9 ? "9+" : wsAttentionCount}</span>
+                      ) : null}
+                    </button>
+                    {wsActivityOpen && (
+                      <div className="hdr-ws-act-panel">
+                        <header className="hdr-ws-act-head">
+                          <div className="hdr-ws-act-head-copy">
+                            <div className="hdr-ws-act-kicker">
+                              <span
+                                className={`hdr-ws-act-livepulse${wsBgJobsActive ? " on" : ""}`}
+                                title={wsBgJobsActive ? "Google sync in progress" : "Idle"}
+                              />
+                              <span className="hdr-ws-act-ph-title">
+                                Workspace agents
+                              </span>
+                            </div>
+                            <p className="hdr-ws-act-ph-sub">
+                              Calendar invites, drafts in Docs / Sheets / Gmail, plus anything SunnyD synced to Drive. Approval steps still bubble up on the Workspace card (corner).
+                            </p>
+                          </div>
+                          <div className="hdr-ws-act-head-actions">
+                            <button
+                              type="button"
+                              className="hdr-ws-act-iconbtn"
+                              title="Refresh list"
+                              aria-label="Refresh agent list from this device"
+                              onClick={() => {
+                                void listJobs(50).then(setWorkspaceJobs).catch(() => {});
+                              }}
+                            >
+                              ↻
                             </button>
+                            <button
+                              type="button"
+                              className="hdr-ws-act-iconbtn hdr-ws-act-close"
+                              aria-label="Close Agents panel"
+                              onClick={() => setWsActivityOpen(false)}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        </header>
+                        <div className="hdr-ws-act-metrics" role="status" aria-live="polite">
+                          <span className="hdr-ws-act-metric">
+                            <b>{wsAgentsCounts.active}</b> running
+                          </span>
+                          <span className="hdr-ws-act-metric">
+                            <b>{wsAgentsCounts.done}</b> done
+                          </span>
+                          <span className="hdr-ws-act-metric">
+                            <b>{wsAgentsCounts.failed}</b> need attention
+                          </span>
+                        </div>
+                        <div className="hdr-ws-act-tabs" role="tablist" aria-label="Filter Workspace runs">
+                          {([
+                            ["all", "All"],
+                            ["active", "Running"],
+                            ["done", "Done"],
+                            ["failed", "Errors"],
+                          ]).map(([id, lbl]) => (
+                            <button
+                              key={id}
+                              type="button"
+                              role="tab"
+                              aria-selected={wsAgentsTab === id}
+                              className={`hdr-ws-act-tab${wsAgentsTab === id ? " on" : ""}`}
+                              onClick={() => setWsAgentsTab(id)}
+                            >
+                              {lbl}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="hdr-ws-act-scrollwrap">
+                          {workspaceJobs.length === 0 || wsAgentsFilteredJobs.length === 0 ? (
+                            <div className="hdr-ws-act-empty">
+                              {agentsPanelEmptyCopy(wsAgentsTab, workspaceJobs.length)}
+                            </div>
+                          ) : (
+                            <ul className="hdr-ws-act-list">
+                              {wsAgentsFilteredJobs.map(j => {
+                                const stKey = String(j.status || "").replace(/\s+/g, "-") || "-";
+                                const pt = workspaceJobPrimaryTitle(j);
+                                const disp = pt.length > 120 ? `${pt.slice(0, 118)}…` : pt;
+                                const prog = j.step && ["queued", "running"].includes(String(j.status || "").toLowerCase());
+                                return (
+                                  <li key={j.jobId} className="hdr-ws-act-card">
+                                    <div className="hdr-ws-act-glyph" aria-hidden>
+                                      {workspaceJobGlyph(j)}
+                                    </div>
+                                    <div className="hdr-ws-act-card-body">
+                                      <div className="hdr-ws-act-card-top">
+                                        <span className="hdr-ws-act-kind">{workspaceDeliverableLine(j)}</span>
+                                        <span className="hdr-ws-act-ts">
+                                          {formatWorkspaceRelativeTime(j.createdAt)}
+                                          {prog ? ` · ${j.step}` : ""}
+                                        </span>
+                                      </div>
+                                      <div className="hdr-ws-act-mainline">
+                                        <span className={`hdr-ws-act-st hdr-ws-st-${stKey}`}>{j.status || "—"}</span>
+                                        {j.webViewLink ? (
+                                          <a
+                                            className="hdr-ws-act-card-title hdr-ws-act-card-title-link"
+                                            href={j.webViewLink}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            title={workspaceJobPrimaryTitle(j) || "Open"}
+                                          >
+                                            {disp || "Untitled"}
+                                          </a>
+                                        ) : (
+                                          <span className="hdr-ws-act-card-title">{disp || workspaceJobGlyph(j)}</span>
+                                        )}
+                                      </div>
+                                      {!prog && j.step ? (
+                                        <div className="hdr-ws-act-step" title={j.step}>{j.step}</div>
+                                      ) : null}
+                                      {j.error ? (
+                                        <details className="hdr-ws-act-details">
+                                          <summary>What went wrong?</summary>
+                                          <pre className="hdr-ws-act-details-pre">
+                                            {String(j.error).length > 800 ? `${String(j.error).slice(0, 800)}…` : String(j.error)}
+                                          </pre>
+                                        </details>
+                                      ) : null}
+                                    </div>
+                                    <div className="hdr-ws-act-card-actions">
+                                      <div className="hdr-ws-act-actions-row">
+                                        {j.webViewLink ? (
+                                          <a
+                                            className="hdr-ws-act-link"
+                                            href={j.webViewLink}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                          >
+                                            Open
+                                          </a>
+                                        ) : null}
+                                        {j.status === "failed" && j.type === "assignment" ? (
+                                          <button type="button" className="hdr-ws-act-retry" onClick={() => retryWorkspaceAssignmentJob(j.jobId)}>
+                                            Retry
+                                          </button>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  </li>
+                                );
+                              })}
+                            </ul>
                           )}
-                        </li>
-                      ))}
-                    </ul>
-                    {workspaceJobs.some(j => j.error) && (
-                      <p className="hdr-ws-act-hint">
-                        Toggle &ldquo;Insert draft link into note&rdquo; under G to paste links automatically when a job finishes.
-                      </p>
+                        </div>
+                        <footer className="hdr-ws-act-footer">
+                          Tip — enable &ldquo;Append link to note when a draft is ready&rdquo; inside the green <strong>G</strong> menu so links paste into your notes when jobs succeed.
+                          {workspaceJobs.some(z => z.error) ? <> Also check Errors above for API messages.</> : null}
+                        </footer>
+                      </div>
                     )}
                   </div>
                 )}
-              </div>
-            )}
-            <div className="export-wrap" title="Export notes" onClick={e => e.stopPropagation()}>
-              <button className="export-btn" onClick={() => setExportOpen(p => !p)}>
-                ↓ Export
-              </button>
-              {exportOpen && (
-                <div className="export-menu">
-                  <button className="export-item" onClick={() => { exportToDocx(false); setExportOpen(false); }}>
-                    <span className="export-item-ic">📄</span>
-                    <span>
-                      <span className="export-item-lbl">This note (.docx)</span>
-                      <span className="export-item-desc">Open in Word or Google Docs</span>
-                    </span>
+                <div className="export-wrap" title="Export notes" onClick={e => e.stopPropagation()}>
+                  <button type="button" className="export-btn" onClick={() => setExportOpen(p => !p)}>
+                    Export
                   </button>
-                  <button className="export-item" onClick={() => { exportToDocx(true); setExportOpen(false); }}>
-                    <span className="export-item-ic">📚</span>
-                    <span>
-                      <span className="export-item-lbl">All notes (.docx)</span>
-                      <span className="export-item-desc">Export all notes in one file</span>
-                    </span>
-                  </button>
-                </div>
-              )}
-            </div>
-            <div
-              className="workspace-wrap hdr-ws-rail-pos"
-              title={wsHdrWorkspaceTitle}
-              onClick={e => e.stopPropagation()}
-            >
-              <div
-                className={`ws-agent-rail${wsAgentLive ? " on" : ""}`}
-                data-phase={wsRailPhase}
-                role="presentation"
-                aria-hidden
-              >
-                <div className="ws-agent-rail-track" />
-              </div>
-              <button
-                type="button"
-                className={`hdr-ws-btn${workspaceEnabled ? " on" : ""}${
-                  wsAnalyzing ? " ws-agent-intense" : wsAgentLive ? " ws-agent-soft" : ""
-                }`}
-                onClick={() => {
-                setWorkspaceExpand(o => !o);
-                setExportOpen(false);
-                setWsActivityOpen(false);
-              }}
-                aria-busy={wsAnalyzing ? "true" : "false"}
-              >
-                G
-                <span className={`hdr-ws-pip${wsAgentLive ? " vis" : ""}`} aria-hidden />
-              </button>
-              {workspaceExpand && (
-                <div className="workspace-pop">
-                  <div className="workspace-pop-h">Google Workspace</div>
-                  {!getGoogleClientId() && (
-                    <p className="workspace-pop-note">Set <code className="workspace-code">VITE_GOOGLE_CLIENT_ID</code> when building (see README).</p>
-                  )}
-                  {workspaceOAuthErr && <p className="workspace-pop-err">{workspaceOAuthErr}</p>}
-                  {wsScanHintMsg && !workspaceOAuthErr && (
-                    <p className="workspace-pop-note workspace-pop-hintmsg">{wsScanHintMsg}</p>
-                  )}
-                  {wsSuccessMsg && !workspaceOAuthErr && (
-                    <p className="workspace-pop-note workspace-pop-ok">{wsSuccessMsg}</p>
-                  )}
-                  {workspaceEnabled &&
-                    wsConnected &&
-                    wsAgentLive &&
-                    (wsAnalyzing ? (
-                      <div className="workspace-pop-status" aria-live="polite">
-                        <strong className="ws-pop-strong">Analyzing note…</strong>
-                        Matching dates, drafts, and meeting hints to Workspace — stays on-device until you approve.
-                      </div>
-                    ) : wsScanScheduled ? (
-                      <div className="workspace-pop-status" aria-live="polite">
-                        <strong className="ws-pop-strong">Watching this note.</strong>
-                        After you pause typing, SunnyD scans for Workspace actions (runs in ~10s).
-                      </div>
-                    ) : wsBgJobsActive ? (
-                      <div className="workspace-pop-status" aria-live="polite">
-                        <strong className="ws-pop-strong">Google Workspace is busy.</strong>
-                        Drafts and files finish in the background — keep this tab open.
-                      </div>
-                    ) : null)}
-                  <label className="workspace-row">
-                    <input
-                      type="checkbox"
-                      checked={workspaceEnabled}
-                      onChange={e => {
-                        const v = e.target.checked;
-                        setWorkspaceEnabled(v);
-                        try { sessionStorage.setItem(LS_WS_MASTER, v ? "1" : "0"); } catch {}
-                      }}
-                    />
-                    <span>Enable automation</span>
-                  </label>
-                  <label className="workspace-row">
-                    <input
-                      type="checkbox"
-                      checked={wsCal}
-                      onChange={e => {
-                        const v = e.target.checked;
-                        setWsCal(v);
-                        try { sessionStorage.setItem(LS_WS_CAL, v ? "1" : "0"); } catch {}
-                      }}
-                    />
-                    <span>Date &amp; time → Calendar</span>
-                  </label>
-                  <label className="workspace-row">
-                    <input
-                      type="checkbox"
-                      checked={wsAssign}
-                      onChange={e => {
-                        const v = e.target.checked;
-                        setWsAssign(v);
-                        try { sessionStorage.setItem(LS_WS_ASSIGN, v ? "1" : "0"); } catch {}
-                      }}
-                    />
-                    <span>Assignments → Docs / Sheets / Gmail draft</span>
-                  </label>
-                  <label className="workspace-row">
-                    <input
-                      type="checkbox"
-                      checked={wsInvites}
-                      onChange={e => {
-                        const v = e.target.checked;
-                        setWsInvites(v);
-                        try { sessionStorage.setItem(LS_WS_INV, v ? "1" : "0"); } catch {}
-                      }}
-                    />
-                    <span>Meetings → Invites with emails in notes</span>
-                  </label>
-                  <label className="workspace-row">
-                    <input
-                      type="checkbox"
-                      checked={workspaceInsertLink}
-                      onChange={e => {
-                        const v = e.target.checked;
-                        setWorkspaceInsertLink(v);
-                        try { sessionStorage.setItem(LS_WS_LINK, v ? "1" : "0"); } catch {}
-                      }}
-                    />
-                    <span>Append link to note when a draft is ready</span>
-                  </label>
-                  <p className="workspace-pop-note">
-                    Long drafts need this tab to stay open. Tokens stay in IndexedDB until you disconnect.
-                  </p>
-                  {!wsConnected ? (
-                    <button
-                      type="button"
-                      className="btn-fill workspace-connect"
-                      disabled={!getGoogleClientId()}
-                      onClick={() => beginGoogleAuthorization()}
-                    >
-                      Connect Google
-                    </button>
-                  ) : (
-                    <>
-                      <button type="button" className="btn-out workspace-connect" onClick={testGoogleCalendarMinimal}>
-                        Test Calendar API
+                  {exportOpen && (
+                    <div className="export-menu">
+                      <button type="button" className="export-item" onClick={() => { exportToDocx(false); setExportOpen(false); }}>
+                        <span className="export-item-ic">📄</span>
+                        <span>
+                          <span className="export-item-lbl">This note (.docx)</span>
+                          <span className="export-item-desc">Open in Word or Google Docs</span>
+                        </span>
                       </button>
-                      <button
-                        type="button"
-                        className="workspace-disconnect btn-out"
-                        onClick={async () => {
-                          await disconnectGoogle();
-                          setWsConnected(false);
-                          setWsHints([]);
-                          setWorkspaceJobs([]);
-                          setWorkspaceOAuthErr("");
-                          setWsSuccessMsg(null);
-                          setWsScanHintMsg(null);
-                          setWsScanHintMsg(null);
-                        }}
+                      <button type="button" className="export-item" onClick={() => { exportToDocx(true); setExportOpen(false); }}>
+                        <span className="export-item-ic">📚</span>
+                        <span>
+                          <span className="export-item-lbl">All notes (.docx)</span>
+                          <span className="export-item-desc">Export all notes in one file</span>
+                        </span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div
+                  className="workspace-wrap hdr-ws-rail-pos"
+                  title={wsHdrWorkspaceTitle}
+                  onClick={e => e.stopPropagation()}
+                >
+                  <div
+                    className={`ws-agent-rail${wsAgentLive ? " on" : ""}`}
+                    data-phase={wsRailPhase}
+                    role="presentation"
+                    aria-hidden
+                  >
+                    <div className="ws-agent-rail-track" />
+                  </div>
+                  <button
+                    type="button"
+                    className={`hdr-ws-btn${workspaceEnabled ? " on" : ""}${
+                      wsAnalyzing ? " ws-agent-intense" : wsAgentLive ? " ws-agent-soft" : ""
+                    }${!workspaceEnabled && getGoogleClientId() ? " hdr-ws-btn--labeled" : ""}`}
+                    onClick={() => {
+                      setWorkspaceExpand(o => !o);
+                      setExportOpen(false);
+                      setWsActivityOpen(false);
+                    }}
+                    aria-busy={wsAnalyzing ? "true" : "false"}
+                    aria-label={workspaceExpand ? "Close Google Workspace settings" : "Open Google Workspace settings"}
+                    title={workspaceEnabled ? "Google Workspace settings" : "Connect Google Workspace — Calendar, Docs, Gmail"}
+                  >
+                    {!workspaceEnabled && getGoogleClientId() ? (
+                      <><span style={{ fontSize: 11 }}>☁</span> Google</>
+                    ) : "G"}
+                    <span className={`hdr-ws-pip${wsAgentLive ? " vis" : ""}`} aria-hidden />
+                  </button>
+                  {workspaceExpand && (
+                    <div className="workspace-pop">
+                      <div className="workspace-pop-h">Google Workspace</div>
+                      {!getGoogleClientId() && (
+                        <p className="workspace-pop-note">Set <code className="workspace-code">VITE_GOOGLE_CLIENT_ID</code> when building (see README).</p>
+                      )}
+                      {workspaceOAuthErr && <p className="workspace-pop-err">{workspaceOAuthErr}</p>}
+                      {wsScanHintMsg && !workspaceOAuthErr && (
+                        <p className="workspace-pop-note workspace-pop-hintmsg">{wsScanHintMsg}</p>
+                      )}
+                      {wsSuccessMsg && !workspaceOAuthErr && (
+                        <p className="workspace-pop-note workspace-pop-ok">{wsSuccessMsg}</p>
+                      )}
+                      {workspaceEnabled &&
+                        wsConnected &&
+                        wsAgentLive &&
+                        (wsAnalyzing ? (
+                          <div className="workspace-pop-status" aria-live="polite">
+                            <strong className="ws-pop-strong">Analyzing note…</strong>
+                            Matching dates, drafts, and meeting hints to Workspace — stays on-device until you approve.
+                          </div>
+                        ) : wsScanScheduled ? (
+                          <div className="workspace-pop-status" aria-live="polite">
+                            <strong className="ws-pop-strong">Watching this note.</strong>
+                            After you pause typing, SunnyD scans for Workspace actions (runs in ~10s).
+                          </div>
+                        ) : wsBgJobsActive ? (
+                          <div className="workspace-pop-status" aria-live="polite">
+                            <strong className="ws-pop-strong">Google Workspace is busy.</strong>
+                            Drafts and files finish in the background — keep this tab open.
+                          </div>
+                        ) : null)}
+                      <div
+                        className="workspace-pop-fieldset"
+                        role="group"
+                        aria-labelledby="ws-pop-automation-cap"
                       >
-                        Disconnect Google
-                      </button>
-                    </>
+                        <div id="ws-pop-automation-cap" className="workspace-pop-fieldset-caption">
+                          What runs from your notes
+                        </div>
+                        <label className="workspace-row">
+                          <input
+                            type="checkbox"
+                            checked={workspaceEnabled}
+                            onChange={e => {
+                              const v = e.target.checked;
+                              setWorkspaceEnabled(v);
+                              try { sessionStorage.setItem(LS_WS_MASTER, v ? "1" : "0"); } catch {}
+                            }}
+                          />
+                          <span>Enable automation</span>
+                        </label>
+                        <label className="workspace-row">
+                          <input
+                            type="checkbox"
+                            checked={wsCal}
+                            onChange={e => {
+                              const v = e.target.checked;
+                              setWsCal(v);
+                              try { sessionStorage.setItem(LS_WS_CAL, v ? "1" : "0"); } catch {}
+                            }}
+                          />
+                          <span>Date &amp; time → Calendar</span>
+                        </label>
+                        <label className="workspace-row">
+                          <input
+                            type="checkbox"
+                            checked={wsAssign}
+                            onChange={e => {
+                              const v = e.target.checked;
+                              setWsAssign(v);
+                              try { sessionStorage.setItem(LS_WS_ASSIGN, v ? "1" : "0"); } catch {}
+                            }}
+                          />
+                          <span>Assignments → Docs / Sheets / Gmail draft</span>
+                        </label>
+                        <label className="workspace-row">
+                          <input
+                            type="checkbox"
+                            checked={wsInvites}
+                            onChange={e => {
+                              const v = e.target.checked;
+                              setWsInvites(v);
+                              try { sessionStorage.setItem(LS_WS_INV, v ? "1" : "0"); } catch {}
+                            }}
+                          />
+                          <span>Meetings → Invites with emails in notes</span>
+                        </label>
+                        <label className="workspace-row">
+                          <input
+                            type="checkbox"
+                            checked={workspaceInsertLink}
+                            onChange={e => {
+                              const v = e.target.checked;
+                              setWorkspaceInsertLink(v);
+                              try { sessionStorage.setItem(LS_WS_LINK, v ? "1" : "0"); } catch {}
+                            }}
+                          />
+                          <span>Append link to note when a draft is ready</span>
+                        </label>
+                      </div>
+
+                      <p className="workspace-pop-note workspace-pop-note-muted">
+                        Keep this tab open for long drafts. Tokens stay on this device until you disconnect.
+                      </p>
+
+                      <div className="workspace-pop-actions">
+                        {workspaceEnabled && wsConnected && apiKey?.trim() && getGoogleClientId() && (
+                          <button
+                            type="button"
+                            className="workspace-btn-scan"
+                            disabled={wsAnalyzing}
+                            onClick={() => {
+                              void runWorkspaceScan(activeId, content, note, { manual: true });
+                            }}
+                          >
+                            Scan note now
+                          </button>
+                        )}
+                        {!wsConnected ? (
+                          <button
+                            type="button"
+                            className="workspace-btn-scan"
+                            disabled={!getGoogleClientId()}
+                            onClick={() => beginGoogleAuthorization()}
+                          >
+                            Connect Google
+                          </button>
+                        ) : (
+                          <>
+                            <button type="button" className="workspace-btn-outline" onClick={testGoogleCalendarMinimal}>
+                              Test Calendar API
+                            </button>
+                            <button
+                              type="button"
+                              className="workspace-btn-danger-soft"
+                              onClick={async () => {
+                                await disconnectGoogle();
+                                setWsConnected(false);
+                                setWsHints([]);
+                                setWorkspaceJobs([]);
+                                setWorkspaceOAuthErr("");
+                                setWsSuccessMsg(null);
+                                setWsScanHintMsg(null);
+                              }}
+                            >
+                              Disconnect Google
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
-              )}
+              </div>
+              <div className="hdr-cluster hdr-cluster-ai">
+                <label htmlFor="hdr-llm-select" className="sr-only">AI model</label>
+                <select
+                  id="hdr-llm-select"
+                  className="hdr-llm-select"
+                  value={llmProvider}
+                  onChange={e => setProviderAndLoadKey(e.target.value)}
+                  title="Switch language model"
+                >
+                  {PROVIDERS.map(x => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="btn-link" onClick={resetKey}>
+                  Change key
+                </button>
+              </div>
             </div>
-            <select className="hdr-llm-select" value={llmProvider} onChange={e => setProviderAndLoadKey(e.target.value)} title="Switch LLM">
-              {PROVIDERS.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
-            </select>
-            <button className="btn-link" onClick={resetKey}>Change key</button>
+          </div>
+          <div className="hdr-row hdr-row-sugg" role="toolbar" aria-label="Suggestion insight cadence">
+            <span className="hdr-sugg-kicker" style={{ fontSize: 9, opacity: .55 }}>Suggestions</span>
+            <div className="hdr-sugg-btns" style={{ marginLeft: 0 }}>
+              {[
+                { key: "off", label: "Off", desc: "No AI suggestions" },
+                { key: "zen", label: "Zen", desc: "Occasional — ~1 per 85 words" },
+                { key: "balanced", label: "Balanced", desc: "Regular — ~1 per 45 words" },
+                { key: "eager", label: "Eager", desc: "Frequent — ~1 per 22 words" },
+              ].map(({ key, label, desc }) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`sugg-freq-btn${suggFreq === key ? " on" : ""}`}
+                  onClick={() => setSuggFreqAndSave(key)}
+                  title={desc}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </header>
 
@@ -5891,6 +6863,17 @@ Return the rewritten passage only:`;
                   scannedLectureSuggRef.current = "";
                   setSugg(p => p.filter(s => s.cat !== "lecture"));
                 }}>Clear</button>
+                <button
+                  type="button"
+                  className="lecture-panel-btn lecture-act-agents"
+                  title="Scan recent lecture transcript for Calendar events, meeting invites, and document drafts — runs with your note context"
+                  onClick={() => void deployLectureAgents()}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{flexShrink:0}}>
+                    <circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+                  </svg>
+                  Scan with Agents
+                </button>
               </div>
             </div>
 
@@ -6100,19 +7083,8 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
           );
         })()}
 
-        <div className="sugg-freq-bar">
-          <span className="sugg-freq-lbl">Suggestions:</span>
-          {[
-            { key: "off", label: "Off", desc: "No suggestions" },
-            { key: "zen", label: "Zen", desc: "At least ~1 per 85 words" },
-            { key: "balanced", label: "Just Right", desc: "At least ~1 per 45 words" },
-            { key: "eager", label: "Eager", desc: "At least ~1 per 22 words" },
-          ].map(({ key, label, desc }) => (
-            <button key={key} className={`sugg-freq-btn${suggFreq === key ? " on" : ""}`} onClick={() => setSuggFreqAndSave(key)} title={desc}>
-              {label}
-            </button>
-          ))}
-        </div>
+
+
 
         <div className="layout">
 
@@ -6152,11 +7124,12 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                   )}
                 </>
               )}
-              <div className="sb-ttl">How it works</div>
+              <div className="sb-ttl">Quick reference</div>
               {[
-                ["Fact checks",  "Right panel — hover to highlight"],
-                ["Completion",   "Tab to accept"],
-                ["Selection",    "Highlight text to transform"],
+                ["Insights",     "Hover card → highlights text in note"],
+                ["Lecture",      "Hover card → shows ➕ add to notes hint"],
+                ["Completion",   "Tab to accept AI suggestion"],
+                ["Selection",    "Highlight text to transform or scan"],
                 ["New note",     `${MOD_KEY}+N`],
                 ["Search",       `${MOD_KEY}+K`],
               ].map(([h, d]) => (
@@ -6175,7 +7148,8 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                 <input className="title-inp" value={note.title} onChange={e => setTitle(e.target.value)} placeholder="Untitled" />
                 <div className="meta-row">
                   <span>{new Date(note.createdAt || Date.now()).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</span>
-                  {activeSugg.length > 0 && <span className="ann-badge">{activeSugg.length} suggestions</span>}
+                  <span>{wc} words</span>
+                  {activeSugg.length > 0 && <span className="ann-badge">{activeSugg.length} suggestion{activeSugg.length !== 1 ? "s" : ""}</span>}
                 </div>
                 {/* Note metadata chips — shown when at least one field is set */}
                 {(note.subject || note.professor || note.goal) && (
@@ -6236,21 +7210,182 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
 
                 {/* Hint bar: loading state while ghost is fetching, or Tab/Esc when ready */}
                 {ghostThinking && !ghost && (
-                  <div className="ghost-hint">
-                    <span className="ghost-hint-txt" style={{ opacity: .5 }}>thinking…</span>
+                  <div className="ghost-hint" role="status" aria-live="polite">
+                    <span className="ghost-hint-label">Completion</span>
+                    <span className="ghost-hint-txt">thinking…</span>
                     <ThinkDots />
                   </div>
                 )}
                 {ghost && (
-                  <div className="ghost-hint">
-                    <span className="ghost-hint-txt">"{ghost.text.trim().slice(0, 60)}{ghost.text.length > 60 ? "…" : ""}"</span>
+                  <div className="ghost-hint" role="status" aria-live="polite">
+                    <span className="ghost-hint-label">Suggestion</span>
+                    <span className="ghost-hint-completion">{ghost.text.trim().slice(0, 72)}{ghost.text.trim().length > 72 ? "…" : ""}</span>
                     <kbd className="kbd">Tab</kbd>
                     <span className="ghost-esc">accept</span>
-                    <span style={{ color: "var(--rule2)", fontSize: 10 }}>·</span>
+                    <span style={{ color: "var(--rule2)", fontSize: 10, flexShrink: 0 }}>·</span>
                     <kbd className="kbd">Esc</kbd>
                     <span className="ghost-esc">dismiss</span>
                   </div>
                 )}
+
+              {/* Workspace card — anchored to note column so it aligns with editor (not viewport corner) */}
+              {workspaceEnabled && wsConnected &&
+                (wsHints.length > 0 || workspaceJobs.length > 0 || wsAnalyzing || wsScanScheduled || wsBgJobsActive) && (
+                <div className="ws-dock-anchor">
+                  <div className={`ws-dock ws-dock--${wsRailPhase}${wsAgentLive ? " ws-dock--live" : " ws-dock--idle"}${wsDockMinimized ? " ws-dock--minimized" : ""}`}>
+                    <div className="ws-dock-inner">
+                      <header className="ws-dock-head">
+                        <span className="ws-dock-head-mark" aria-hidden />
+                        <div className="ws-dock-head-main">
+                          <div className="ws-dock-brand">Workspace agents</div>
+                          <p className="ws-dock-tagline">{wsDockSubtitle}</p>
+                        </div>
+                        <div className="ws-dock-head-trail">
+                          {wsAttentionCount > 0 ? (
+                            <span className={`ws-dock-badge${wsDockPulse ? " ws-dock-badge--pulse" : ""}`} aria-label={`${wsAttentionCount} items need attention`}>
+                              {wsAttentionCount > 99 ? "99+" : wsAttentionCount}
+                            </span>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="ws-dock-mini"
+                            onClick={() => {
+                              setWsDockMinimized(v => {
+                                const next = !v;
+                                try { sessionStorage.setItem(LS_WS_DOCK_MIN, next ? "1" : "0"); } catch {}
+                                return next;
+                              });
+                            }}
+                            aria-expanded={!wsDockMinimized}
+                            title={wsDockMinimized ? "Expand panel" : "Minimize panel"}
+                            aria-label={wsDockMinimized ? "Expand Workspace agents panel" : "Minimize Workspace agents panel"}
+                          >
+                            <svg
+                              className="ws-dock-mini-ic"
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              aria-hidden
+                            >
+                              <path d="M18 15l-6-6-6 6" />
+                            </svg>
+                          </button>
+                        </div>
+                      </header>
+                    <div className="ws-dock-collapse" aria-hidden={wsDockMinimized}>
+                      <div className="ws-dock-collapse-inn">
+                    {(wsAnalyzing || wsScanScheduled || wsBgJobsActive) && (
+                      <div className="ws-dock-status" data-phase={wsRailPhase}>
+                        <span className="ws-mini-dots" aria-hidden><i/><i/><i/></span>
+                        <span>
+                          {wsAnalyzing && (
+                            <><span className="ws-dock-strong">Scanning note</span><span className="ws-dock-muted"> — Matching dates, invites & drafts. Nothing uploads until you approve.</span></>
+                          )}
+                          {!wsAnalyzing && wsScanScheduled && (
+                            <><span className="ws-dock-strong">Standing by</span><span className="ws-dock-muted"> — Pauses ~10s after you stop typing (aim for {WORKSPACE_SCAN_MIN_PLAIN_CHARS}+ characters).</span></>
+                          )}
+                          {!wsAnalyzing && !wsScanScheduled && wsBgJobsActive && (
+                            <><span className="ws-dock-strong">Syncing</span><span className="ws-dock-muted"> — Creating files in Drive / Calendar / Gmail. Keep this tab open.</span></>
+                          )}
+                        </span>
+                      </div>
+                    )}
+                    {wsHints.length > 0 && (
+                      <div className="ws-dock-section">
+                        <div className="ws-dock-section-h">
+                          <span>Pending your review</span>
+                          <span className="ws-dock-section-n">{wsHints.length}</span>
+                        </div>
+                        {wsHints.map(h => {
+                          const { icon, label, cls } = wsHintKindLabel(h.kind);
+                          const title = String(h.data?.summary || h.data?.title || "item");
+                          const dateMeta = h.kind !== "assignment" ? wsHintDateMeta(h) : wsHintAssignMeta(h);
+                          return (
+                            <div key={h.id} className={`ws-dock-hint ws-dock-hint--${h.kind || "default"}`}>
+                              <span className={`ws-hint-kind ${cls}`} aria-label={label}>
+                                <span aria-hidden>{icon}</span>
+                                {label}
+                              </span>
+                              <div className="ws-hint-body">
+                                <span className="ws-hint-snip" title={title}>
+                                  {title.length > 46 ? title.slice(0, 45) + "…" : title}
+                                </span>
+                                {dateMeta && <span className="ws-hint-meta">{dateMeta}</span>}
+                              </div>
+                              <button
+                                type="button"
+                                className="ws-hint-btn"
+                                onClick={() => {
+                                  setWorkspaceOAuthErr("");
+                                  setWsModal({
+                                    kind:
+                                      h.kind === "assignment" ? "assignment" : h.kind === "meeting" ? "meeting" : "calendar",
+                                    data:
+                                      h.kind === "assignment"
+                                        ? { ...h.data }
+                                        : normalizeCalendarDates({
+                                            ...h.data,
+                                            attendeesStr: (h.data.attendeesEmails || []).join(", ") || h.data.attendeesStr || "",
+                                          }),
+                                  });
+                                }}
+                              >
+                                Review →
+                              </button>
+                              <button type="button" className="ws-hint-dismiss" title="Dismiss" aria-label={`Dismiss ${label} hint`} onClick={() => setWsHints(x => x.filter(y => y.id !== h.id))}>
+                                ✕
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {workspaceJobs.length > 0 && (
+                      <div className="ws-dock-section">
+                        <div className="ws-dock-section-h">
+                          <span>Runs &amp; outputs</span>
+                          <span className="ws-dock-section-n">{workspaceJobs.slice(0, 12).length}</span>
+                        </div>
+                        {workspaceJobs.slice(0, 12).map(j => (
+                          <div key={j.jobId} className="ws-dock-job">
+                            <div className="ws-job-line1">
+                              <span className={`ws-job-status ws-job-${String(j.status || "").replace(/\s+/g, "-")}`}>{j.status}</span>
+                              <span className="ws-job-type">{workspaceDeliverableLine(j)}</span>
+                              <span className="ws-job-spacer" />
+                              {j.webViewLink && (
+                                <a href={j.webViewLink} target="_blank" rel="noopener noreferrer" className="ws-job-link">
+                                  Open in Google
+                                </a>
+                              )}
+                              {(j.status === "failed") && j.type === "assignment" && (
+                                <button type="button" className="ws-job-retry" onClick={() => retryWorkspaceAssignmentJob(j.jobId)}>
+                                  Retry
+                                </button>
+                              )}
+                            </div>
+                            <div className="ws-job-title" title={(j.step || j.title || j.type || "job").toString()}>
+                              {j.step || j.title || j.type || "job"}
+                            </div>
+                            {j.error && (
+                              <span className="ws-job-err" title={j.error}>
+                                {j.error.length > 900 ? `${j.error.slice(0, 900)}…` : j.error}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                      </div>
+                    </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               </div>
 
@@ -6289,15 +7424,32 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                         onHover={id => setHoveredSuggId(id)}
                         onLeave={() => setHoveredSuggId(null)}
                         onCardClick={handleCardClick}
+                        isHovered={hoveredSuggId === s.id}
                       />
                     </div>
                   ))}
                 </div>
 
                 {activeSugg.length === 0 && !busy && (
-                  <p className="ann-empty">
-                    {suggestionsOn ? "SunnyD reads your notes as you write and surfaces insights here." : "Suggestions are off. Turn them on above to get AI suggestions."}
-                  </p>
+                  <div className="ann-empty">
+                    {suggestionsOn ? (
+                      <>
+                        <span style={{ fontSize: 20, opacity: .35, display: "block", marginBottom: 7 }}>✦</span>
+                        <span style={{ display: "block", fontWeight: 600, marginBottom: 4, color: "var(--ink2)", fontSize: 11.5 }}>
+                          Insights appear here
+                        </span>
+                        <span>SunnyD watches your notes as you write — fact checks, expansions, and research suggestions surface automatically.</span>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ fontSize: 20, opacity: .25, display: "block", marginBottom: 7 }}>○</span>
+                        <span style={{ display: "block", fontWeight: 600, marginBottom: 4, color: "var(--ink2)", fontSize: 11.5 }}>
+                          Suggestions are off
+                        </span>
+                        <span>Set <em>Just Right</em> or <em>Eager</em> in the cadence bar above to start receiving AI insights.</span>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -6316,7 +7468,27 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
             }}
             onClick={e => e.stopPropagation()}
           >
-            {/* Row 1 — AI actions */}
+            {/* Workspace agents row */}
+            <div className="sel-toolbar-agent-wrap">
+              <button
+                type="button"
+                className="sel-toolbar-agents"
+                title={`Scan selected text for Calendar events, meeting invites, Docs/Sheets/Gmail drafts — runs with full note${lectureOn ? " + live lecture" : ""} context`}
+                onClick={() => void deployAgentsFromSelection(selMenu)}
+              >
+                <span className="sel-toolbar-agents-glow" aria-hidden />
+                <span className="sel-toolbar-agents-ring" aria-hidden />
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{opacity:.9,flexShrink:0}}>
+                  <circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+                </svg>
+                <span>Scan with Agents</span>
+                {lectureOn && <span style={{fontSize:9,opacity:.7,fontWeight:600,letterSpacing:'.04em',background:'rgba(255,255,255,.12)',padding:'1px 5px',borderRadius:6}}>+ Lecture</span>}
+              </button>
+            </div>
+
+            <div className="sel-toolbar-sep-h" />
+
+            {/* Row 2 — Semantic AI */}
             <div className="sel-toolbar-acts">
               {SEL_ACTS.map(({ key, icon, label }, i) => (
                 <React.Fragment key={key}>
@@ -6332,7 +7504,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
             {/* Divider */}
             <div className="sel-toolbar-sep-h" />
 
-            {/* Row 2 — Text formatting */}
+            {/* Row 3 — Text formatting */}
             <div className="sel-toolbar-fmts">
               {[
                 { type: 'bold',       content: <strong style={{fontSize:12}}>B</strong>,  title: 'Bold' },
@@ -6368,14 +7540,16 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
         {/* ── Thinking pill while AI processes ── */}
         {selThinking && (
           <div
-            className="sel-thinking-pill"
+            className={`sel-thinking-pill${selThinking.action === "agents" ? " sel-thinking-pill--agents" : ""}`}
             style={{
               left: selThinking.x,
-              top: selThinking.below ? selThinking.y : Math.max(8, selThinking.y - 40),
+              top: selThinking.below ? selThinking.y : Math.max(8, selThinking.y - 44),
             }}
+            aria-live="polite"
+            role="status"
           >
-            <span style={{ fontSize: 13 }}>◌</span>
-            {{ summarize: "Summarizing…", expand: "Expanding…", explain: "Explaining…" }[selThinking.action]}
+            <span className="sel-thinking-spinner" aria-hidden />
+            {{ summarize: "Summarizing…", expand: "Expanding…", explain: "Explaining…", agents: "Scanning with Workspace agents…" }[selThinking.action]}
           </div>
         )}
 
@@ -6431,18 +7605,33 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
               onClick={e => e.stopPropagation()}
             >
               <div className="ws-modal-hdr">
-                <span className="ws-modal-title">
-                  {{ calendar: "Calendar event", meeting: "Meeting invite", assignment: "Assignment draft" }[wsModal.kind] || "Workspace"}
-                </span>
+                <div>
+                  <div className="ws-modal-kicker">Workspace agent — review before sending</div>
+                  <span className="ws-modal-title">
+                    {{ calendar: "📅 Calendar event", meeting: "👥 Meeting invite", assignment: "✏ Assignment draft" }[wsModal.kind] || "Workspace"}
+                  </span>
+                </div>
                 <button type="button" className="x-btn" onClick={() => setWsModal(null)} aria-label="Close">
                   ×
                 </button>
               </div>
               {(wsModal.kind === "calendar" || wsModal.kind === "meeting") && (
                 <div className="ws-modal-body">
+                  {wsModal.data.sourceQuote && (
+                    <div className="ws-modal-source-quote">
+                      <div className="ws-modal-source-quote-bar" />
+                      <div>
+                        <span className="ws-modal-source-lbl">Detected from your note</span>
+                        <span className="ws-modal-source-quote-text">
+                          &ldquo;{String(wsModal.data.sourceQuote).slice(0, 180)}{String(wsModal.data.sourceQuote).length > 180 ? "…" : ""}&rdquo;
+                        </span>
+                      </div>
+                    </div>
+                  )}
                   <label className="ws-field">
-                    <span>Summary</span>
+                    <span>Title</span>
                     <input
+                      placeholder={wsModal.kind === "meeting" ? "e.g. Coffee chat with Alex" : "e.g. CS101 Exam"}
                       value={wsModal.data.summary || ""}
                       onChange={e =>
                         setWsModal(m => ({
@@ -6453,13 +7642,14 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                     />
                   </label>
                   <label className="ws-field">
-                    <span>Start (ISO datetime)</span>
+                    <span>Start</span>
                     <input
-                      value={wsModal.data.startIso || ""}
+                      type="datetime-local"
+                      value={isoToDatetimeLocal(wsModal.data.startIso)}
                       onChange={e =>
                         setWsModal(m => ({
                           ...m,
-                          data: { ...m.data, startIso: e.target.value },
+                          data: { ...m.data, startIso: datetimeLocalToIso(e.target.value) },
                         }))
                       }
                       onBlur={() =>
@@ -6472,22 +7662,23 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                     />
                   </label>
                   <label className="ws-field">
-                    <span>End (ISO datetime)</span>
+                    <span>End</span>
                     <input
-                      placeholder="Defaults to start + 1 hour if empty when you click Send"
-                      value={wsModal.data.endIso || ""}
+                      type="datetime-local"
+                      value={isoToDatetimeLocal(wsModal.data.endIso)}
                       onChange={e =>
                         setWsModal(m => ({
                           ...m,
-                          data: { ...m.data, endIso: e.target.value },
+                          data: { ...m.data, endIso: datetimeLocalToIso(e.target.value) },
                         }))
                       }
                     />
+                    <span className="ws-field-hint">Leave blank to default to start + 1 hour</span>
                   </label>
                   <label className="ws-field">
                     <span>Time zone</span>
                     <input
-                      placeholder="America/New_York"
+                      placeholder={Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York"}
                       value={wsModal.data.timeZone || ""}
                       onChange={e =>
                         setWsModal(m => ({
@@ -6499,8 +7690,9 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                   </label>
                   {wsModal.kind === "meeting" && (
                     <label className="ws-field">
-                      <span>Attendee emails (comma-separated)</span>
+                      <span>Attendee emails</span>
                       <input
+                        placeholder="alice@example.com, bob@example.com"
                         value={wsModal.data.attendeesStr || ""}
                         onChange={e =>
                           setWsModal(m => ({
@@ -6509,12 +7701,14 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                           }))
                         }
                       />
+                      <span className="ws-field-hint">Comma-separated — attendees receive a Google Calendar invite</span>
                     </label>
                   )}
                   <label className="ws-field">
-                    <span>Description</span>
+                    <span>Description <span style={{fontWeight:400,opacity:.7}}>(optional)</span></span>
                     <textarea
-                      rows={3}
+                      rows={2}
+                      placeholder="Add any extra details to show in the calendar event…"
                       value={wsModal.data.description || ""}
                       onChange={e =>
                         setWsModal(m => ({
@@ -6524,13 +7718,12 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                       }
                     />
                   </label>
-                  <p className="ws-modal-quote">&ldquo;{String(wsModal.data.sourceQuote || "").slice(0, 220)}{String(wsModal.data.sourceQuote || "").length > 220 ? "…" : ""}&rdquo;</p>
                   {workspaceOAuthErr && (
                     <p className="workspace-pop-err ws-modal-send-err">{workspaceOAuthErr}</p>
                   )}
                   <div className="ws-modal-actions">
                     <button type="button" className="btn-fill" onClick={() => submitWorkspaceModal(wsModal)}>
-                      {wsModal.kind === "meeting" ? "Send invites" : "Add to Calendar"}
+                      {wsModal.kind === "meeting" ? "✓ Send calendar invites" : "✓ Add to Google Calendar"}
                     </button>
                     <button type="button" className="btn-out" onClick={() => setWsModal(null)}>
                       Cancel
@@ -6540,12 +7733,24 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
               )}
               {wsModal.kind === "assignment" && (
                 <div className="ws-modal-body">
+                  {wsModal.data.sourceQuote && (
+                    <div className="ws-modal-source-quote">
+                      <div className="ws-modal-source-quote-bar" />
+                      <div>
+                        <span className="ws-modal-source-lbl">Detected from your note</span>
+                        <span className="ws-modal-source-quote-text">
+                          &ldquo;{String(wsModal.data.sourceQuote).slice(0, 180)}{String(wsModal.data.sourceQuote).length > 180 ? "…" : ""}&rdquo;
+                        </span>
+                      </div>
+                    </div>
+                  )}
                   <p className="ws-modal-disc">
-                    SunnyD drafts in your Google account for your review. You are responsible for accuracy and for following your institution&apos;s rules.
+                    SunnyD drafts this in your Google account for your review. You are responsible for accuracy and for following your institution&apos;s academic integrity policy.
                   </p>
                   <label className="ws-field">
-                    <span>Title</span>
+                    <span>Document title</span>
                     <input
+                      placeholder="e.g. Biology Lab Report — Week 3"
                       value={wsModal.data.title || ""}
                       onChange={e =>
                         setWsModal(m => ({
@@ -6587,9 +7792,10 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                     </label>
                   )}
                   <label className="ws-field">
-                    <span>Instructions</span>
+                    <span>Instructions for the draft</span>
                     <textarea
                       rows={4}
+                      placeholder="Describe what SunnyD should write — requirements, format, tone, key points to cover…"
                       value={wsModal.data.instructionsSummary || ""}
                       onChange={e =>
                         setWsModal(m => ({
@@ -6598,11 +7804,14 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                         }))
                       }
                     />
+                    <span className="ws-field-hint">SunnyD uses these instructions along with your note context to create the draft.</span>
                   </label>
-                  <p className="ws-modal-quote">&ldquo;{String(wsModal.data.sourceQuote || "").slice(0, 220)}{String(wsModal.data.sourceQuote || "").length > 220 ? "…" : ""}&rdquo;</p>
+                  {workspaceOAuthErr && (
+                    <p className="workspace-pop-err ws-modal-send-err">{workspaceOAuthErr}</p>
+                  )}
                   <div className="ws-modal-actions">
                     <button type="button" className="btn-fill" onClick={() => submitWorkspaceModal(wsModal)}>
-                      Create draft
+                      ✓ Create draft in Google
                     </button>
                     <button type="button" className="btn-out" onClick={() => setWsModal(null)}>
                       Cancel
@@ -6611,87 +7820,6 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                 </div>
               )}
             </div>
-          </div>
-        )}
-
-        {workspaceEnabled && wsConnected &&
-          (wsHints.length > 0 || workspaceJobs.length > 0 || wsAnalyzing || wsScanScheduled || wsBgJobsActive) && (
-          <div className="ws-dock">
-            <div className="ws-dock-title">Workspace</div>
-            {(wsAnalyzing || wsScanScheduled || wsBgJobsActive) && (
-              <div className="ws-dock-status">
-                <span className="ws-mini-dots" aria-hidden><i/><i/><i/></span>
-                <span>
-                  {wsAnalyzing && (
-                    <><span className="ws-dock-strong">Analyzing note</span><span className="ws-dock-muted"> — matching dates & drafts to your wording</span></>
-                  )}
-                  {!wsAnalyzing && wsScanScheduled && (
-                    <><span className="ws-dock-strong">Ready to check</span><span className="ws-dock-muted"> — scans ~10s after you pause typing (100+ words)</span></>
-                  )}
-                  {!wsAnalyzing && !wsScanScheduled && wsBgJobsActive && (
-                    <><span className="ws-dock-strong">In progress</span><span className="ws-dock-muted"> — SunnyD ↔ Google Workspace</span></>
-                  )}
-                </span>
-              </div>
-            )}
-            {wsHints.length > 0 && (
-              <div className="ws-dock-section">
-                {wsHints.map(h => (
-                  <div key={h.id} className="ws-dock-hint">
-                    <span className="ws-hint-kind">{h.kind}</span>
-                    <span className="ws-hint-snip">{String(h.data?.summary || h.data?.title || "item").slice(0, 36)}…</span>
-                    <button
-                      type="button"
-                      className="ws-hint-btn"
-                      onClick={() => {
-                        setWorkspaceOAuthErr("");
-                        setWsModal({
-                          kind:
-                            h.kind === "assignment" ? "assignment" : h.kind === "meeting" ? "meeting" : "calendar",
-                          data:
-                            h.kind === "assignment"
-                              ? { ...h.data }
-                              : normalizeCalendarDates({
-                                  ...h.data,
-                                  attendeesStr: (h.data.attendeesEmails || []).join(", ") || h.data.attendeesStr || "",
-                                }),
-                        });
-                      }}
-                    >
-                      Verify
-                    </button>
-                    <button type="button" className="ws-hint-dismiss" onClick={() => setWsHints(x => x.filter(y => y.id !== h.id))}>
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {workspaceJobs.length > 0 && (
-              <div className="ws-dock-section">
-                {workspaceJobs.slice(0, 12).map(j => (
-                  <div key={j.jobId} className="ws-dock-job">
-                    <span className={`ws-job-status ws-job-${String(j.status || "").replace(/\s+/g, "-")}`}>{j.status}</span>
-                    <span className="ws-job-title">{j.step || j.title || j.type || "job"}</span>
-                    {j.webViewLink && (
-                      <a href={j.webViewLink} target="_blank" rel="noopener noreferrer" className="ws-job-link">
-                        Open
-                      </a>
-                    )}
-                    {(j.status === "failed") && (
-                      <button type="button" className="ws-job-retry" onClick={() => retryWorkspaceAssignmentJob(j.jobId)}>
-                        Retry
-                      </button>
-                    )}
-                    {j.error && (
-                      <span className="ws-job-err" title={j.error}>
-                        {j.error.length > 900 ? `${j.error.slice(0, 900)}…` : j.error}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         )}
 
@@ -7113,8 +8241,13 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                   <div className="dc-header">
                     <span className="dc-dot" style={{ background: cat.color }} />
                     <span className="dc-type" style={{ color: cat.color }}>{cat.label}</span>
-                    <button className="dc-close" onClick={closeDocked}>×</button>
+                    <button className="dc-close" onClick={closeDocked} aria-label="Close suggestion">×</button>
                   </div>
+                  {s.headline && (
+                    <div style={{ fontFamily:"'DM Sans',sans-serif", fontSize:13, fontWeight:650, color:"var(--ink)", marginBottom:8, lineHeight:1.4 }}>
+                      {s.headline}
+                    </div>
+                  )}
                   <div className="dc-body">{parseWithLinks(s.detail, `dc-${s.id}`)}</div>
                   {s.cat === "research" && s.articles?.length > 0 && (
                     <div className="dc-articles">
@@ -7128,10 +8261,10 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                   )}
                   <div className="dc-btns">
                     <button className="dc-apply" onClick={() => { applySuggestion(s); closeDocked(); }}>
-                      ✓ Apply
+                      ✓ {s.cat === "fact" || s.cat === "clarity" ? "Apply fix" : s.cat === "expand" || s.cat === "lecture" ? "Add to note" : s.cat === "research" ? "Add citation" : "Apply"}
                     </button>
                     <button className="dc-decline" onClick={() => { dismissSugg(s.id); closeDocked(); }}>
-                      ✕ Decline
+                      Dismiss
                     </button>
                   </div>
                 </>
