@@ -1522,7 +1522,8 @@ const CSS = `
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;}
 body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoothing:antialiased;color:var(--ink);}
-.app{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
+.app{display:flex;flex-direction:column;height:100vh;overflow:hidden;animation:appEntrance .55s cubic-bezier(.22,1,.36,1) both;}
+@keyframes appEntrance{from{opacity:0;transform:scale(.99)}to{opacity:1;transform:scale(1)}}
 
 /* ── Key screen ── */
 /* ── Key screen ──────────────────────────────────────────────────────────── */
@@ -1559,6 +1560,10 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
   animation:keyCardIn .45s cubic-bezier(.22,1,.36,1) both;
 }
 @keyframes keyCardIn{from{opacity:0;transform:translateY(20px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes keyCardOut{from{opacity:1;transform:translateY(0) scale(1)}to{opacity:0;transform:translateY(-16px) scale(.96)}}
+@keyframes keyScreenOut{from{opacity:1}to{opacity:0}}
+.key-card--exit{animation:keyCardOut .45s cubic-bezier(.4,0,.2,1) forwards;}
+.key-screen--exiting{animation:keyScreenOut .5s ease .1s forwards;pointer-events:none;}
 
 /* Brand row */
 .key-brand{display:flex;align-items:center;gap:13px;margin-bottom:24px;}
@@ -3681,6 +3686,7 @@ function KeyScreen({ onSave }) {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [showKey, setShowKey] = useState(false);
+  const [exiting, setExiting] = useState(false);
 
   const p = PROVIDERS.find(x => x.id === provider) || PROVIDERS[0];
 
@@ -3697,15 +3703,19 @@ function KeyScreen({ onSave }) {
     setLoading(true); setErr("");
     try {
       await ai(provider, k, "Reply with the single word: ready", "ping", 10);
-      onSave(provider, k);
+      // Trigger exit animation, then hand off
+      setExiting(true);
+      setTimeout(() => onSave(provider, k), 480);
     } catch (e) {
       const msg = (e.message || "").toLowerCase();
       if (msg.includes("max_tokens") || msg.includes("maximum") || msg.includes("token") || msg.includes("content_policy")) {
-        onSave(provider, k);
+        setExiting(true);
+        setTimeout(() => onSave(provider, k), 480);
       } else {
         setErr(e.message?.slice(0, 140) || "Could not connect — double-check your key and try again.");
+        setLoading(false);
       }
-    } finally { setLoading(false); }
+    }
   };
 
   const PROVIDER_ICONS = {
@@ -3721,9 +3731,9 @@ function KeyScreen({ onSave }) {
   };
 
   return (
-    <div className="key-screen">
+    <div className={`key-screen${exiting ? " key-screen--exiting" : ""}`}>
       <div className="key-bg-deco" aria-hidden />
-      <div className="key-card">
+      <div className={`key-card${exiting ? " key-card--exit" : ""}`}>
         {/* Brand */}
         <div className="key-brand">
           <div className="key-brand-mark">
