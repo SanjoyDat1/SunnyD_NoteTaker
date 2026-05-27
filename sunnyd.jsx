@@ -1491,7 +1491,7 @@ function AnnCard({ s, onDismiss, isNew, onHover, onLeave, onCardClick, isHovered
       {!s.applying && isHovered && (
         <div className={`ann-hover-hint${s.cat === "lecture" && !s.textRef ? " ann-hover-hint--lecture" : ""}`}>
           {s.cat === "lecture" && !s.textRef ? (
-            <><span aria-hidden>➕</span> Click to add to your notes</>
+            <>+ Click to add to your notes</>
           ) : s.textRef ? (
             <>
               <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor" aria-hidden><path d="M8 1a.5.5 0 0 1 .5.5v11.793l3.146-3.147a.5.5 0 1 1 .708.708l-4 4a.5.5 0 0 1-.708 0l-4-4a.5.5 0 1 1 .708-.708L7.5 13.293V1.5A.5.5 0 0 1 8 1z"/></svg>
@@ -1865,6 +1865,8 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .hdr-wc{font-size:11px;color:var(--ink3);opacity:.6;}
 .btn-link{font-size:11px;background:none;border:none;cursor:pointer;padding:7px 9px;border-radius:8px;transition:background .15s,color .15s;color:var(--ink3);font-weight:600;}
 .btn-link:hover{background:rgba(232,224,212,.45);color:var(--ink2);}
+.hdr-key-btn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;background:none;border:1px solid transparent;border-radius:7px;cursor:pointer;color:var(--ink3);transition:background .15s,border-color .15s,color .15s;}
+.hdr-key-btn:hover{background:rgba(232,224,212,.5);border-color:var(--rule2);color:var(--ink2);}
 
 /* ── Lecture toggle & transcript ── */
 .lecture-btn{display:flex;align-items:center;gap:6px;padding:6px 13px;border-radius:999px;border:1px solid rgba(218,209,198,.94);background:var(--page);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--ink2);cursor:pointer;transition:all .2s;line-height:1.25;white-space:nowrap;box-shadow:0 1px 2px rgba(42,38,34,.05);}
@@ -3152,12 +3154,12 @@ function datetimeLocalToIso(val) {
   return s;
 }
 
-/** Format a workspace hint kind into icon + human label for the dock card */
+/** Format a workspace hint kind into a human label for the dock card */
 function wsHintKindLabel(kind) {
-  if (kind === "calendar") return { icon: "📅", label: "Calendar event", cls: "ws-hint-kind--calendar" };
-  if (kind === "meeting")  return { icon: "👥", label: "Meeting invite", cls: "ws-hint-kind--meeting" };
-  if (kind === "assignment") return { icon: "✏", label: "Draft", cls: "ws-hint-kind--assignment" };
-  return { icon: "◈", label: String(kind || "item"), cls: "ws-hint-kind--default" };
+  if (kind === "calendar")   return { icon: null, label: "Event", cls: "ws-hint-kind--calendar" };
+  if (kind === "meeting")    return { icon: null, label: "Meeting", cls: "ws-hint-kind--meeting" };
+  if (kind === "assignment") return { icon: null, label: "Draft", cls: "ws-hint-kind--assignment" };
+  return { icon: null, label: String(kind || "Task"), cls: "ws-hint-kind--default" };
 }
 
 /** Return a short date/time preview string from a hint data object */
@@ -3202,17 +3204,17 @@ function workspaceDeliverableLine(j) {
 }
 
 function workspaceJobGlyph(j) {
-  if (!j || typeof j !== "object") return "✨";
+  if (!j || typeof j !== "object") return "·";
   const ty = String(j.type || "").toLowerCase();
-  if (ty === "calendar") return "📅";
-  if (ty === "meeting") return "📨";
+  if (ty === "calendar") return "Cal";
+  if (ty === "meeting")  return "Mtg";
   if (ty === "assignment") {
     const dt = String(j.payload?.deliverableType || "doc").toLowerCase();
-    if (dt === "sheet") return "📊";
-    if (dt === "email_draft") return "📧";
-    return "📄";
+    if (dt === "sheet") return "Sheet";
+    if (dt === "email_draft") return "Email";
+    return "Doc";
   }
-  return "✨";
+  return "·";
 }
 
 function formatWorkspaceRelativeTime(ts) {
@@ -3853,7 +3855,7 @@ function FactPop({ ann, onDismiss, onClose, onApply }) {
       {phase === "p" && (
         <><div className="pop-prev"><span className="pop-prev-lbl">Will replace with</span>{ann.data.replacement}</div>
         <div className="pop-btns">
-          <button className="btn-fill" onClick={() => onApply(ann)}>✓ Confirm</button>
+          <button className="btn-fill" onClick={() => onApply(ann)}>Confirm</button>
           <button className="btn-out" onClick={() => setPhase("c")}>Back</button>
         </div></>
       )}
@@ -6401,9 +6403,9 @@ Return the rewritten passage only:`;
   const wc = (content.replace(/<[^>]*>/g, ' ').match(/\S+/g) || []).length;
 
   const SEL_ACTS = [
-    { key: "summarize", icon: "◈", label: "Summarize" },
-    { key: "expand",    icon: "⊕", label: "Expand"    },
-    { key: "explain",   icon: "◉", label: "Explain"   },
+    { key: "summarize", icon: null, label: "Summarize" },
+    { key: "expand",    icon: null, label: "Expand"    },
+    { key: "explain",   icon: null, label: "Explain"   },
   ];
 
   const isEmail = s => typeof s === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
@@ -6610,7 +6612,9 @@ Return the rewritten passage only:`;
                   {lectureOn && listening && !lecturePaused ? (
                     <span className="lecture-rec-dot" style={{ width: 7, height: 7 }} />
                   ) : (
-                    <span className="lecture-btn-ic">◉</span>
+                    <span className="lecture-btn-ic" aria-hidden>
+                      <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="currentColor" opacity=".7"/></svg>
+                    </span>
                   )}
                   <span>{lectureOn ? (lecturePaused ? "Paused" : "Recording") : "Lecture"}</span>
                 </button>
@@ -6633,7 +6637,7 @@ Return the rewritten passage only:`;
                     } catch {}
                   }}
                 >
-                  ☀ Cast
+                  Cast
                 </button>
                 {workspaceEnabled && getGoogleClientId() && (wsAttentionCount > 0 || workspaceJobs.length > 0) && (
                   <div className="hdr-ws-act-wrap" onClick={e => e.stopPropagation()}>
@@ -6821,17 +6825,15 @@ Return the rewritten passage only:`;
                   {exportOpen && (
                     <div className="export-menu">
                       <button type="button" className="export-item" onClick={() => { exportToDocx(false); setExportOpen(false); }}>
-                        <span className="export-item-ic">📄</span>
                         <span>
-                          <span className="export-item-lbl">This note (.docx)</span>
-                          <span className="export-item-desc">Open in Word or Google Docs</span>
+                          <span className="export-item-lbl">This note</span>
+                          <span className="export-item-desc">.docx — Word or Google Docs</span>
                         </span>
                       </button>
                       <button type="button" className="export-item" onClick={() => { exportToDocx(true); setExportOpen(false); }}>
-                        <span className="export-item-ic">📚</span>
                         <span>
-                          <span className="export-item-lbl">All notes (.docx)</span>
-                          <span className="export-item-desc">Export all notes in one file</span>
+                          <span className="export-item-lbl">All notes</span>
+                          <span className="export-item-desc">.docx — combined in one file</span>
                         </span>
                       </button>
                     </div>
@@ -6864,9 +6866,7 @@ Return the rewritten passage only:`;
                     aria-label={workspaceExpand ? "Close Google Workspace settings" : "Open Google Workspace settings"}
                     title={workspaceEnabled ? "Google Workspace settings" : "Connect Google Workspace — Calendar, Docs, Gmail"}
                   >
-                    {!workspaceEnabled && getGoogleClientId() ? (
-                      <><span style={{ fontSize: 11 }}>☁</span> Google</>
-                    ) : "G"}
+                    {!workspaceEnabled && getGoogleClientId() ? "Google" : "G"}
                     <span className={`hdr-ws-pip${wsAgentLive ? " vis" : ""}`} aria-hidden />
                   </button>
                   {workspaceExpand && (
@@ -7039,8 +7039,16 @@ Return the rewritten passage only:`;
                     </option>
                   ))}
                 </select>
-                <button type="button" className="btn-link" onClick={resetKey}>
-                  Change key
+                <button
+                  type="button"
+                  className="hdr-key-btn"
+                  onClick={resetKey}
+                  title="Change API key"
+                  aria-label="Change API key"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+                  </svg>
                 </button>
               </div>
             </div>
@@ -7075,11 +7083,11 @@ Return the rewritten passage only:`;
               <span className="lecture-panel-lbl">
                 {listening && !lecturePaused
                   ? <><span className="lecture-rec-dot" />Live transcription</>
-                  : <span style={{ opacity: .65 }}>⏸ Paused</span>}
+                  : <span style={{ opacity: .65 }}>Paused</span>}
               </span>
               <div className="lecture-panel-actions">
                 <button className="lecture-pause-btn" onClick={() => setLecturePaused(p => !p)}>
-                  {lecturePaused ? "▶ Resume" : "⏸ Pause"}
+                  {lecturePaused ? "Resume" : "Pause"}
                 </button>
                 <button className="lecture-panel-btn" onClick={() => setShowFullTranscript(p => !p)}>
                   {showFullTranscript ? "Collapse" : "Expand"}
@@ -7155,7 +7163,7 @@ Return the rewritten passage only:`;
                 </span>
                 {!showFullTranscript && finalTranscript && (
                   <span style={{ fontSize: 10, color: "var(--ink3)", cursor: "pointer" }} onClick={() => setShowFullTranscript(true)}>
-                    Show full transcript ↓
+                    Show full transcript
                   </span>
                 )}
               </div>
@@ -7189,7 +7197,7 @@ Return the rewritten passage only:`;
               {/* Header */}
               <div className="lecture-q-card-hdr">
                 <span className="lecture-q-badge">
-                  {isNoted ? "✓ Added to notes" : isExpanded ? "⊕ Detailed response" : "Suggested response"}
+                  {isNoted ? "Added to notes" : isExpanded ? "Detailed response" : "Suggested response"}
                 </span>
                 <button className="x-btn" onClick={() => {
                   setActiveLectureQ(null);
@@ -7233,7 +7241,7 @@ Return the rewritten passage only:`;
                         setTimeout(() => { setActiveLectureQ(null); setLectureQAdded(false); }, 1200);
                       }}
                     >
-                      {lectureQAdded || isNoted ? "✓ Added" : "＋ Add to Notes"}
+                      {lectureQAdded || isNoted ? "Added" : "Add to Notes"}
                     </button>
 
                     {/* Expand / Collapse */}
@@ -7250,7 +7258,7 @@ Return the rewritten passage only:`;
                         }
                       }}
                     >
-                      {isExpanded ? "⊖ Collapse" : "⊕ Expand"}
+                      {isExpanded ? "Collapse" : "Expand"}
                     </button>
 
                     {/* Copy */}
@@ -7323,7 +7331,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
           <aside className="notes-sb">
             <div className="sb-top-row">
               <button className="new-btn" title={`New note (${MOD_KEY}+N)`} onClick={() => openNewNoteSetup()}>+ New Note</button>
-              <button className="search-btn" title={`Search notes (${MOD_KEY}+K)`} onClick={() => setSearchOpen(true)}>⌕</button>
+              <button className="search-btn" title={`Search notes (${MOD_KEY}+K)`} onClick={() => setSearchOpen(true)}>Search</button>
             </div>
             {notes.map(n => {
               const switchNote = () => { setActiveId(n.id); setGhost(null); setGhostThinking(false); setSelMenu(null); setSelThinking(null); setSelRes(null); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); };
@@ -7344,10 +7352,10 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
             })}
             <div className="sb-footer">
               {savingToDisk ? (
-                <div key={lastSavedAt} className="sb-autosave sb-disk just-saved">✓ Saved to disk</div>
+                <div key={lastSavedAt} className="sb-autosave sb-disk just-saved">Saved to disk</div>
               ) : (
                 <>
-                  <div key={lastSavedAt} className="sb-autosave just-saved">✓ Notes saved locally</div>
+                  <div key={lastSavedAt} className="sb-autosave just-saved">Notes saved locally</div>
                   {supportsFileAccess() && (
                     <button type="button" className="sb-disk-btn" onClick={saveNotesToDisk}>
                       Save to file on disk
@@ -7355,17 +7363,6 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                   )}
                 </>
               )}
-              <div className="sb-ttl">Quick reference</div>
-              {[
-                ["Insights",     "Hover card → highlights text in note"],
-                ["Lecture",      "Hover card → shows ➕ add to notes hint"],
-                ["Completion",   "Tab to accept AI suggestion"],
-                ["Selection",    "Highlight text to transform or scan"],
-                ["New note",     `${MOD_KEY}+N`],
-                ["Search",       `${MOD_KEY}+K`],
-              ].map(([h, d]) => (
-                <div key={h} className="sb-item"><div className="sb-h">{h}</div><div className="sb-d">{d}</div></div>
-              ))}
             </div>
           </aside>
 
@@ -7385,17 +7382,17 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                 {/* Note metadata chips — shown when at least one field is set */}
                 {(note.subject || note.professor || note.goal) && (
                   <div className="note-meta-chips">
-                    {note.subject   && <span className="note-meta-chip"><span className="note-meta-chip-icon">📚</span>{note.subject}</span>}
-                    {note.professor && <span className="note-meta-chip"><span className="note-meta-chip-icon">👤</span>{note.professor}</span>}
-                    {note.goal      && <span className="note-meta-chip"><span className="note-meta-chip-icon">🎯</span>{note.goal}</span>}
-                    <button className="note-meta-edit-btn" title="Edit note details" onClick={openEditNoteMeta}>✎ edit</button>
+                    {note.subject   && <span className="note-meta-chip">{note.subject}</span>}
+                    {note.professor && <span className="note-meta-chip">{note.professor}</span>}
+                    {note.goal      && <span className="note-meta-chip">{note.goal}</span>}
+                    <button className="note-meta-edit-btn" title="Edit note details" onClick={openEditNoteMeta}>Edit</button>
                   </div>
                 )}
                 {/* Prompt to add metadata if none set yet */}
                 {!note.subject && !note.professor && !note.goal && (
                   <div style={{ paddingBottom: 4 }}>
-                    <button className="note-meta-edit-btn" style={{ fontSize: 11.5, color: 'var(--ink3)', opacity: .7 }} onClick={openEditNoteMeta}>
-                      + add subject &amp; professor for smarter suggestions
+                    <button className="note-meta-edit-btn" style={{ fontSize: 11, color: 'var(--ink3)', opacity: .6 }} onClick={openEditNoteMeta}>
+                      Add subject &amp; professor for smarter suggestions
                     </button>
                   </div>
                 )}
@@ -7468,7 +7465,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                       <header className="ws-dock-head">
                         <span className="ws-dock-head-mark" aria-hidden />
                         <div className="ws-dock-head-main">
-                          <div className="ws-dock-brand">Workspace agents</div>
+                          <div className="ws-dock-brand">Google Workspace</div>
                           <p className="ws-dock-tagline">{wsDockSubtitle}</p>
                         </div>
                         <div className="ws-dock-head-trail">
@@ -7538,10 +7535,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                           const dateMeta = h.kind !== "assignment" ? wsHintDateMeta(h) : wsHintAssignMeta(h);
                           return (
                             <div key={h.id} className={`ws-dock-hint ws-dock-hint--${h.kind || "default"}`}>
-                              <span className={`ws-hint-kind ${cls}`} aria-label={label}>
-                                <span aria-hidden>{icon}</span>
-                                {label}
-                              </span>
+                              <span className={`ws-hint-kind ${cls}`}>{label}</span>
                               <div className="ws-hint-body">
                                 <span className="ws-hint-snip" title={title}>
                                   {title.length > 46 ? title.slice(0, 45) + "…" : title}
@@ -7569,7 +7563,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                                 Review →
                               </button>
                               <button type="button" className="ws-hint-dismiss" title="Dismiss" aria-label={`Dismiss ${label} hint`} onClick={() => setWsHints(x => x.filter(y => y.id !== h.id))}>
-                                ✕
+                                ×
                               </button>
                             </div>
                           );
@@ -7665,19 +7659,17 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                   <div className="ann-empty">
                     {suggestionsOn ? (
                       <>
-                        <span style={{ fontSize: 20, opacity: .35, display: "block", marginBottom: 7 }}>✦</span>
-                        <span style={{ display: "block", fontWeight: 600, marginBottom: 4, color: "var(--ink2)", fontSize: 11.5 }}>
+                        <span style={{ display: "block", fontWeight: 600, marginBottom: 5, color: "var(--ink2)", fontSize: 11.5 }}>
                           Insights appear here
                         </span>
-                        <span>SunnyD watches your notes as you write — fact checks, expansions, and research suggestions surface automatically.</span>
+                        <span>AI suggestions surface as you write — fact checks, clarifications, and research links.</span>
                       </>
                     ) : (
                       <>
-                        <span style={{ fontSize: 20, opacity: .25, display: "block", marginBottom: 7 }}>○</span>
-                        <span style={{ display: "block", fontWeight: 600, marginBottom: 4, color: "var(--ink2)", fontSize: 11.5 }}>
+                        <span style={{ display: "block", fontWeight: 600, marginBottom: 5, color: "var(--ink2)", fontSize: 11.5 }}>
                           Suggestions are off
                         </span>
-                        <span>Set <em>Just Right</em> or <em>Eager</em> in the cadence bar above to start receiving AI insights.</span>
+                        <span>Choose <em>Balanced</em> or <em>Eager</em> above to enable AI insights.</span>
                       </>
                     )}
                   </div>
@@ -7709,11 +7701,8 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
               >
                 <span className="sel-toolbar-agents-glow" aria-hidden />
                 <span className="sel-toolbar-agents-ring" aria-hidden />
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{opacity:.9,flexShrink:0}}>
-                  <circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
-                </svg>
                 <span>Scan with Agents</span>
-                {lectureOn && <span style={{fontSize:9,opacity:.7,fontWeight:600,letterSpacing:'.04em',background:'rgba(255,255,255,.12)',padding:'1px 5px',borderRadius:6}}>+ Lecture</span>}
+                {lectureOn && <span style={{fontSize:9,opacity:.75,fontWeight:700,letterSpacing:'.04em',background:'rgba(255,255,255,.14)',padding:'1px 6px',borderRadius:6}}>+ Lecture</span>}
               </button>
             </div>
 
@@ -7721,11 +7710,10 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
 
             {/* Row 2 — Semantic AI */}
             <div className="sel-toolbar-acts">
-              {SEL_ACTS.map(({ key, icon, label }, i) => (
+              {SEL_ACTS.map(({ key, label }, i) => (
                 <React.Fragment key={key}>
                   {i > 0 && <div className="sel-toolbar-sep" />}
                   <button className="sel-toolbar-btn" onClick={() => handleSelAction(key)}>
-                    <span className="sel-toolbar-btn-ic">{icon}</span>
                     {label}
                   </button>
                 </React.Fragment>
@@ -7802,7 +7790,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
             >
               <div className="sel-result-hdr">
                 <span className="sel-result-badge">
-                  {{ summarize: "◈ Summarize", expand: "⊕ Expand", explain: "◉ Explain" }[selRes.action]}
+                  {{ summarize: "Summarize", expand: "Expand", explain: "Explain" }[selRes.action]}
                 </span>
                 <span className={`sel-result-op ${selRes.op === "replace" ? "replace" : "add"}`}>
                   {selRes.op === "replace" ? "replaces" : "adds after"}
@@ -7819,7 +7807,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                 </>
               )}
               <div className="sel-result-btns">
-                {!selRes.isError && <button className="btn-fill" style={{ flex: 1 }} onClick={weaveSelResult}>✓ Apply</button>}
+                {!selRes.isError && <button className="btn-fill" style={{ flex: 1 }} onClick={weaveSelResult}>Apply</button>}
                 <button className="btn-out" onClick={() => setSelRes(null)}>Dismiss</button>
               </div>
             </div>
@@ -7839,7 +7827,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                 <div>
                   <div className="ws-modal-kicker">Workspace agent — review before sending</div>
                   <span className="ws-modal-title">
-                    {{ calendar: "📅 Calendar event", meeting: "👥 Meeting invite", assignment: "✏ Assignment draft" }[wsModal.kind] || "Workspace"}
+                    {{ calendar: "Calendar event", meeting: "Meeting invite", assignment: "Assignment draft" }[wsModal.kind] || "Workspace"}
                   </span>
                 </div>
                 <button type="button" className="x-btn" onClick={() => setWsModal(null)} aria-label="Close">
@@ -7954,7 +7942,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                   )}
                   <div className="ws-modal-actions">
                     <button type="button" className="btn-fill" onClick={() => submitWorkspaceModal(wsModal)}>
-                      {wsModal.kind === "meeting" ? "✓ Send calendar invites" : "✓ Add to Google Calendar"}
+                      {wsModal.kind === "meeting" ? "Add to Google Calendar" : "Add to Google Calendar"}
                     </button>
                     <button type="button" className="btn-out" onClick={() => setWsModal(null)}>
                       Cancel
@@ -8042,7 +8030,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                   )}
                   <div className="ws-modal-actions">
                     <button type="button" className="btn-fill" onClick={() => submitWorkspaceModal(wsModal)}>
-                      ✓ Create draft in Google
+                      Create draft in Google
                     </button>
                     <button type="button" className="btn-out" onClick={() => setWsModal(null)}>
                       Cancel
@@ -8492,7 +8480,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                   )}
                   <div className="dc-btns">
                     <button className="dc-apply" onClick={() => { applySuggestion(s); closeDocked(); }}>
-                      ✓ {s.cat === "fact" || s.cat === "clarity" ? "Apply fix" : s.cat === "expand" || s.cat === "lecture" ? "Add to note" : s.cat === "research" ? "Add citation" : "Apply"}
+                      {s.cat === "fact" || s.cat === "clarity" ? "Apply fix" : s.cat === "expand" || s.cat === "lecture" ? "Add to note" : s.cat === "research" ? "Add citation" : "Apply"}
                     </button>
                     <button className="dc-decline" onClick={() => { dismissSugg(s.id); closeDocked(); }}>
                       Dismiss
