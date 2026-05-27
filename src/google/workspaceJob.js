@@ -31,10 +31,19 @@ async function fetchDriveLink(fileId) {
 
 async function composeDraft(aiFn, title, instructions, noteContext) {
   const system =
-    `You are helping the user draft a deliverable FOR THEIR REVIEW. Output plain text only — no preamble. ` +
-    `Produce structured, substantive content aligned with the instructions. The user must edit and ensure academic honesty.`;
+    `You are drafting a professional email for the user to review and send. ` +
+    `Output GitHub-flavored Markdown — this will be rendered as HTML in Gmail. ` +
+    `Use proper email structure:\n` +
+    `- Open with a professional greeting (e.g. "Hi [Name]," or "Dear [Name],").\n` +
+    `- Use short paragraphs with blank lines between them for readability.\n` +
+    `- Use **bold** for key terms or section headers within paragraphs.\n` +
+    `- Use bullet lists (- item) for enumerating items, steps, or options.\n` +
+    `- Use ## Section headings only if the email is long and has distinct sections.\n` +
+    `- End with a professional sign-off (e.g. "Best regards," followed by a blank line and the sender name if known).\n` +
+    `- No preamble, no meta-commentary — output the email body directly.\n` +
+    `The user MUST review and edit before sending. Do not invent facts not in the notes.`;
   const user =
-    `Title: ${title}\n\nInstructions:\n${instructions}\n\nContext from notes:\n${noteContext.slice(0, 8000)}\n\nWrite the full draft.`;
+    `Email subject: ${title}\n\nInstructions:\n${instructions}\n\nContext from notes:\n${noteContext.slice(0, 8000)}\n\nWrite the email body now.`;
   const t = await aiFn(system, user, 4000);
   return (t || "").trim();
 }
@@ -99,7 +108,7 @@ export async function runAssignmentJob(p) {
       const body = await composeDraft(
         aiFn,
         title,
-        (payload.instructionsSummary || "") + "\nFormat as email body (greeting + paragraphs).",
+        payload.instructionsSummary || "",
         noteContext
       );
       await patchJob(jobId, { step: "Saving Gmail draft…" });

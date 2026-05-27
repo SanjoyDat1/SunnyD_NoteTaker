@@ -1525,22 +1525,156 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .app{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
 
 /* ── Key screen ── */
-.key-screen{display:flex;align-items:center;justify-content:center;height:100vh;background:#E8761A;padding:24px;}
-.key-card{width:100%;max-width:400px;background:var(--page);border-radius:4px;border:1px solid var(--rule2);box-shadow:0 4px 24px var(--sh);padding:40px;}
-.key-mark{width:34px;height:34px;background:var(--ink);color:var(--paper);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:'DM Sans',sans-serif;font-weight:700;font-size:14px;margin-bottom:20px;}
-.key-mark-logo{width:72px;height:72px;object-fit:contain;padding:8px 5px;border-radius:50%;background:#ed7f21;box-shadow:0 3px 14px rgba(237,127,33,.45);margin-bottom:20px;display:block;}
-.key-title{font-family:'DM Sans',sans-serif;font-size:22px;font-weight:700;margin-bottom:6px;line-height:1.25;letter-spacing:-.02em;}
-.key-sub{font-size:13px;color:var(--ink3);line-height:1.6;margin-bottom:24px;}
-.key-lbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--ink3);display:block;margin-bottom:7px;}
-.key-select{width:100%;padding:10px 13px;border:1px solid var(--rule2);border-radius:6px;background:var(--page);color:var(--ink);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;transition:border-color .18s;margin-bottom:10px;cursor:pointer;}
-.key-inp{width:100%;padding:10px 13px;border:1px solid var(--rule2);border-radius:6px;background:var(--paper);color:var(--ink);font-family:'DM Sans',sans-serif;font-size:13.5px;outline:none;transition:border-color .18s;margin-bottom:10px;}
-.key-inp:focus{border-color:var(--ink2);}
-.key-btn{width:100%;padding:11px;background:var(--ink);color:var(--paper);border:none;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13.5px;font-weight:600;transition:opacity .18s;margin-bottom:14px;}
-.key-btn:hover:not(:disabled){opacity:.82;}
-.key-btn:disabled{opacity:.4;cursor:default;}
-.key-err{font-size:12px;color:var(--red);margin-bottom:10px;line-height:1.4;}
-.key-note{font-size:11px;color:var(--ink3);line-height:1.55;}
-.key-note a{color:var(--ink2);}
+/* ── Key screen ──────────────────────────────────────────────────────────── */
+.key-screen{
+  display:flex;align-items:center;justify-content:center;min-height:100vh;
+  background:linear-gradient(145deg,#1a100a 0%,#2d1a0e 40%,#3a2010 70%,#4a2a14 100%);
+  padding:24px;position:relative;overflow:hidden;
+}
+/* Decorative warm glow */
+.key-bg-deco{
+  position:absolute;top:-120px;right:-120px;
+  width:520px;height:520px;border-radius:50%;
+  background:radial-gradient(circle,rgba(237,127,33,.22) 0%,transparent 65%);
+  pointer-events:none;
+}
+.key-bg-deco::after{
+  content:"";position:absolute;bottom:-180px;left:-60px;
+  width:400px;height:400px;border-radius:50%;
+  background:radial-gradient(circle,rgba(237,127,33,.1) 0%,transparent 65%);
+}
+
+.key-card{
+  position:relative;z-index:1;
+  width:100%;max-width:440px;
+  background:rgba(255,252,247,.97);
+  backdrop-filter:blur(12px);
+  border-radius:20px;
+  border:1px solid rgba(255,255,255,.9);
+  box-shadow:
+    0 0 0 1px rgba(0,0,0,.06),
+    0 8px 32px rgba(0,0,0,.2),
+    0 32px 64px rgba(0,0,0,.12);
+  padding:40px 40px 32px;
+  animation:keyCardIn .45s cubic-bezier(.22,1,.36,1) both;
+}
+@keyframes keyCardIn{from{opacity:0;transform:translateY(20px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+
+/* Brand row */
+.key-brand{display:flex;align-items:center;gap:13px;margin-bottom:24px;}
+.key-brand-mark{
+  width:46px;height:46px;border-radius:12px;flex-shrink:0;overflow:hidden;
+  background:#ed7f21;box-shadow:0 3px 10px rgba(237,127,33,.4);
+  display:flex;align-items:center;justify-content:center;
+}
+.key-brand-img{width:100%;height:100%;object-fit:contain;padding:6px 4px;}
+.key-brand-text{display:flex;flex-direction:column;gap:2px;}
+.key-brand-name{font-family:'DM Sans',sans-serif;font-size:17px;font-weight:800;color:var(--ink);letter-spacing:-.025em;line-height:1;}
+.key-brand-tag{font-size:11px;color:var(--ink3);font-weight:500;letter-spacing:.01em;}
+
+.key-divider{height:1px;background:rgba(215,205,190,.6);margin-bottom:24px;}
+
+/* Heading */
+.key-heading{font-family:'DM Sans',sans-serif;font-size:22px;font-weight:780;color:var(--ink);letter-spacing:-.03em;line-height:1.2;margin:0 0 8px;}
+.key-sub{font-size:12.5px;color:var(--ink3);line-height:1.65;margin-bottom:26px;}
+
+/* Field label */
+.key-field-label{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;color:var(--ink3);margin-bottom:9px;}
+
+/* Provider pills */
+.key-providers{display:flex;gap:8px;margin-bottom:22px;flex-wrap:wrap;}
+.key-provider-pill{
+  flex:1;min-width:90px;
+  display:flex;align-items:center;justify-content:center;gap:7px;
+  padding:10px 14px;
+  border-radius:10px;
+  border:1.5px solid rgba(215,205,190,.8);
+  background:var(--page);
+  font-family:'DM Sans',sans-serif;font-size:12.5px;font-weight:600;
+  color:var(--ink2);cursor:pointer;
+  transition:border-color .18s,background .18s,color .18s,box-shadow .18s;
+}
+.key-provider-pill:hover{border-color:rgba(140,120,100,.65);background:#fffefb;color:var(--ink);}
+.key-provider-pill--on{
+  border-color:#ed7f21;background:rgba(237,127,33,.07);color:#b85c0a;
+  box-shadow:0 0 0 3px rgba(237,127,33,.12);
+}
+.key-provider-icon{display:flex;align-items:center;opacity:.7;}
+.key-provider-pill--on .key-provider-icon{opacity:1;}
+
+/* Input wrap */
+.key-inp-wrap{position:relative;margin-bottom:16px;}
+.key-inp{
+  width:100%;box-sizing:border-box;
+  padding:12px 44px 12px 15px;
+  border:1.5px solid rgba(215,205,190,.9);
+  border-radius:10px;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:'DM Sans',sans-serif;font-size:14px;
+  outline:none;
+  transition:border-color .18s,box-shadow .18s;
+  font-weight:500;
+  letter-spacing:.03em;
+}
+.key-inp:focus{
+  border-color:#ed7f21;
+  box-shadow:0 0 0 3px rgba(237,127,33,.12);
+}
+.key-inp::placeholder{color:#c8beb4;font-weight:400;letter-spacing:.01em;}
+.key-eye-btn{
+  position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  background:none;border:none;cursor:pointer;padding:4px;
+  color:var(--ink3);opacity:.6;transition:opacity .15s;
+  display:flex;align-items:center;
+}
+.key-eye-btn:hover{opacity:1;}
+
+/* Error */
+.key-err{
+  display:flex;align-items:flex-start;gap:7px;
+  padding:10px 13px;margin-bottom:14px;
+  background:rgba(200,50,50,.06);
+  border:1px solid rgba(200,50,50,.2);
+  border-radius:8px;
+  font-size:12px;color:#9b2020;line-height:1.45;
+}
+.key-err svg{flex-shrink:0;margin-top:1px;color:#c42b2b;}
+
+/* CTA button */
+.key-btn{
+  width:100%;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  padding:13px 20px;
+  background:linear-gradient(135deg,#2a1a0d,var(--ink));
+  color:#fff;border:none;
+  border-radius:11px;
+  cursor:pointer;
+  font-family:'DM Sans',sans-serif;font-size:14px;font-weight:700;
+  letter-spacing:-.01em;
+  box-shadow:0 4px 16px rgba(26,18,10,.25);
+  transition:opacity .18s,transform .18s,box-shadow .18s;
+  margin-bottom:20px;
+}
+.key-btn:hover:not(:disabled){opacity:.88;transform:translateY(-1px);box-shadow:0 6px 22px rgba(26,18,10,.3);}
+.key-btn:active:not(:disabled){transform:translateY(0);}
+.key-btn:disabled{opacity:.35;cursor:default;box-shadow:none;}
+.key-btn-spinner{
+  width:14px;height:14px;border-radius:50%;
+  border:2px solid rgba(255,255,255,.25);
+  border-top-color:rgba(255,255,255,.9);
+  animation:tpSpin .7s linear infinite;
+  flex-shrink:0;
+}
+
+/* Footer */
+.key-footer{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;}
+.key-footer-link{font-size:12px;color:var(--ink3);text-decoration:none;font-weight:500;transition:color .15s;}
+.key-footer-link:hover{color:var(--ink2);}
+.key-footer-sep{color:var(--rule2);}
+
+/* Legacy — hidden */
+.key-mark,.key-mark-logo,.key-title,.key-lbl,.key-select,.key-note{display:none;}
 
 /* ── Header (two-row chrome: primary tools + insight cadence) ── */
 .sr-only{
@@ -3546,12 +3680,14 @@ function KeyScreen({ onSave }) {
   const [val, setVal] = useState(() => { try { return sessionStorage.getItem(`sd_key_${sessionStorage.getItem("sd_provider") || "openai"}`) || ""; } catch { return ""; } });
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showKey, setShowKey] = useState(false);
 
   const p = PROVIDERS.find(x => x.id === provider) || PROVIDERS[0];
 
   const handleProviderChange = (newProvider) => {
     setProvider(newProvider);
     setErr("");
+    setShowKey(false);
     try { setVal(sessionStorage.getItem(`sd_key_${newProvider}`) || ""); } catch { setVal(""); }
   };
 
@@ -3564,35 +3700,120 @@ function KeyScreen({ onSave }) {
       onSave(provider, k);
     } catch (e) {
       const msg = (e.message || "").toLowerCase();
-      // Some providers error on very short max_tokens — still accept the key
       if (msg.includes("max_tokens") || msg.includes("maximum") || msg.includes("token") || msg.includes("content_policy")) {
         onSave(provider, k);
       } else {
-        setErr(e.message?.slice(0, 120) || "Could not connect — check your key and try again.");
+        setErr(e.message?.slice(0, 140) || "Could not connect — double-check your key and try again.");
       }
     } finally { setLoading(false); }
   };
 
+  const PROVIDER_ICONS = {
+    openai: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M22.28 9.28a5.87 5.87 0 0 0-.5-4.83 6.05 6.05 0 0 0-6.5-2.9A5.87 5.87 0 0 0 10.85 0a6.05 6.05 0 0 0-5.76 4.19 5.87 5.87 0 0 0-3.93 2.84 6.05 6.05 0 0 0 .74 7.1 5.87 5.87 0 0 0 .5 4.82 6.05 6.05 0 0 0 6.5 2.9A5.87 5.87 0 0 0 13.14 24a6.05 6.05 0 0 0 5.76-4.19 5.87 5.87 0 0 0 3.93-2.84 6.05 6.05 0 0 0-.74-7.1zm-9.15 12.84a4.48 4.48 0 0 1-2.88-1.05l.14-.08 4.78-2.76a.78.78 0 0 0 .4-.68v-6.74l2.02 1.17a.07.07 0 0 1 .04.06v5.58a4.51 4.51 0 0 1-4.5 4.5zM3.7 18.14a4.48 4.48 0 0 1-.54-3.02l.14.09 4.78 2.76a.78.78 0 0 0 .79 0l5.83-3.37v2.33a.07.07 0 0 1-.03.06l-4.84 2.79A4.51 4.51 0 0 1 3.7 18.14zm-1.17-9.9a4.48 4.48 0 0 1 2.35-1.97v5.68a.78.78 0 0 0 .39.68l5.83 3.37-2.02 1.16a.07.07 0 0 1-.07 0L4.16 14.4A4.51 4.51 0 0 1 2.53 8.24zm16.6 3.87-5.83-3.37 2.02-1.16a.07.07 0 0 1 .07 0l4.85 2.8a4.5 4.5 0 0 1-.7 8.12v-5.68a.78.78 0 0 0-.4-.71zm2-3.03-.14-.09-4.78-2.75a.78.78 0 0 0-.79 0L9.58 9.61V7.28a.07.07 0 0 1 .03-.06l4.84-2.79a4.5 4.5 0 0 1 6.68 4.66zm-12.65 4.16-2.02-1.17a.07.07 0 0 1-.04-.06V6.43a4.5 4.5 0 0 1 7.38-3.45l-.14.08-4.78 2.76a.78.78 0 0 0-.4.68v6.74zm1.1-2.36 2.6-1.5 2.6 1.5v2.98l-2.6 1.5-2.6-1.5V10.88z"/></svg>
+    ),
+    claude: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M13.827 3.52h3.603L24 20.32h-3.603l-6.57-16.8ZM6.396 3.52 0 20.32h3.667l1.336-3.636h6.733l1.335 3.636h3.667L10.342 3.52H6.396Zm-.354 10.099 2.315-6.283 2.315 6.283H6.042Z"/></svg>
+    ),
+    gemini: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm0 2.182c5.423 0 9.818 4.395 9.818 9.818S17.423 21.818 12 21.818 2.182 17.423 2.182 12 6.577 2.182 12 2.182zm0 2.91C8.186 5.09 5.09 8.186 5.09 12S8.186 18.91 12 18.91 18.91 15.814 18.91 12 15.814 5.09 12 5.09zm0 3.637c1.807 0 3.273 1.466 3.273 3.273S13.807 15.273 12 15.273 8.727 13.807 8.727 12 10.193 8.727 12 8.727z"/></svg>
+    ),
+  };
+
   return (
     <div className="key-screen">
+      <div className="key-bg-deco" aria-hidden />
       <div className="key-card">
-        <img src="/sunnyd-logo.png" alt="SunnyD" className="key-mark-logo" />
-        <div className="key-title">SunnyD Notes</div>
-        <div className="key-sub">AI-assisted note-taking with full client-side control. Open-source and self-hosted — your API keys are stored locally and only sent to the provider you choose.</div>
-        <label className="key-lbl">LLM Provider</label>
-        <select className="key-select" value={provider} onChange={e => handleProviderChange(e.target.value)}>
-          {PROVIDERS.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
-        </select>
-        <label className="key-lbl">{p.name} API Key</label>
-        <input className="key-inp" type="password" placeholder={p.placeholder} value={val}
-          onChange={e => { setVal(e.target.value); setErr(""); }}
-          onKeyDown={e => e.key === "Enter" && !loading && submit()} autoFocus />
-        {err && <div className="key-err">{err}</div>}
+        {/* Brand */}
+        <div className="key-brand">
+          <div className="key-brand-mark">
+            <img src="/sunnyd-logo.png" alt="" className="key-brand-img" />
+          </div>
+          <div className="key-brand-text">
+            <span className="key-brand-name">SunnyD</span>
+            <span className="key-brand-tag">Intelligent Notes</span>
+          </div>
+        </div>
+
+        <div className="key-divider" />
+
+        {/* Heading */}
+        <h1 className="key-heading">Connect your AI</h1>
+        <p className="key-sub">Your keys are stored only in this browser session — never sent anywhere except the provider you choose.</p>
+
+        {/* Provider pills */}
+        <div className="key-field-label">Provider</div>
+        <div className="key-providers" role="group" aria-label="Select AI provider">
+          {PROVIDERS.map(x => (
+            <button
+              key={x.id}
+              type="button"
+              className={`key-provider-pill${provider === x.id ? " key-provider-pill--on" : ""}`}
+              onClick={() => handleProviderChange(x.id)}
+              aria-pressed={provider === x.id}
+            >
+              <span className="key-provider-icon" aria-hidden>{PROVIDER_ICONS[x.id]}</span>
+              {x.name}
+            </button>
+          ))}
+        </div>
+
+        {/* Key input */}
+        <div className="key-field-label">{p.name} API Key</div>
+        <div className="key-inp-wrap">
+          <input
+            className="key-inp"
+            type={showKey ? "text" : "password"}
+            placeholder={p.placeholder}
+            value={val}
+            onChange={e => { setVal(e.target.value); setErr(""); }}
+            onKeyDown={e => e.key === "Enter" && !loading && submit()}
+            autoFocus
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            className="key-eye-btn"
+            onClick={() => setShowKey(s => !s)}
+            title={showKey ? "Hide key" : "Show key"}
+            aria-label={showKey ? "Hide API key" : "Show API key"}
+          >
+            {showKey ? (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            )}
+          </button>
+        </div>
+
+        {err && (
+          <div className="key-err" role="alert">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            {err}
+          </div>
+        )}
+
+        {/* CTA */}
         <button className="key-btn" onClick={submit} disabled={loading || !val.trim()}>
-          {loading ? "Verifying…" : "Continue"}
+          {loading ? (
+            <><span className="key-btn-spinner" aria-hidden /><span>Verifying…</span></>
+          ) : (
+            <><span>Get started</span>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            </>
+          )}
         </button>
-        <div className="key-note">
-          Get an API key at <a href={p.url} target="_blank" rel="noreferrer">{p.url.replace("https://", "")}</a>
+
+        {/* Footer */}
+        <div className="key-footer">
+          <a className="key-footer-link" href={p.url} target="_blank" rel="noreferrer">
+            Get a {p.name} key →
+          </a>
+          <span className="key-footer-sep" aria-hidden>·</span>
+          <a className="key-footer-link" href="https://github.com/SanjoyDat1/SunnyD_NoteTaker" target="_blank" rel="noreferrer">
+            View source
+          </a>
         </div>
       </div>
     </div>
