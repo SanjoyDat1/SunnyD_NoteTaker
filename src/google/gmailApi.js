@@ -173,38 +173,55 @@ function mdToPlain(markdown) {
 }
 
 /**
+ * Strip LLM artifacts: "Subject: ..." header lines and leading "---" separators
+ * that the model sometimes prepends even when told not to.
+ */
+function cleanLlmEmailBody(markdown) {
+  return (markdown || "")
+    .replace(/^\*{0,2}Subject:[^\n]*\*{0,2}\n*/i, "")
+    .replace(/^-{3,}\n+/, "")
+    .trimStart();
+}
+
+/**
  * Create a Gmail draft with proper HTML formatting.
- * Sends multipart/alternative with plain-text fallback.
+ * Sends multipart/alternative (text/plain fallback + text/html).
+ * Uses 8-bit transfer encoding inside; the outer message is base64url encoded
+ * by the Gmail API wrapper.
  *
- * @param {string} to   comma-separated recipients
+ * @param {string} to            comma-separated recipients
  * @param {string} subject
- * @param {string} bodyMarkdown  markdown-formatted body from LLM
+ * @param {string} bodyMarkdown  markdown body from LLM
  */
 export async function createDraft(to, subject, bodyMarkdown) {
-  const htmlBody = wrapEmailTemplate(markdownToEmailHtml(bodyMarkdown), subject);
-  const plainBody = mdToPlain(bodyMarkdown);
+  const cleaned = cleanLlmEmailBody(bodyMarkdown);
+  const htmlBody = wrapEmailTemplate(markdownToEmailHtml(cleaned), subject);
+  const plainBody = mdToPlain(cleaned);
 
-  const boundary = `sd_mime_${Date.now().toString(36)}`;
+  const boundary = `sd_boundary_${Date.now().toString(36)}`;
 
-  const raw =
-    `To: ${to}\r\n` +
-    `Subject: ${subject}\r\n` +
-    `MIME-Version: 1.0\r\n` +
-    `Content-Type: multipart/alternative; boundary="${boundary}"\r\n` +
-    `\r\n` +
-    `--${boundary}\r\n` +
-    `Content-Type: text/plain; charset=utf-8\r\n` +
-    `Content-Transfer-Encoding: quoted-printable\r\n` +
-    `\r\n` +
-    `${plainBody}\r\n` +
-    `\r\n` +
-    `--${boundary}\r\n` +
-    `Content-Type: text/html; charset=utf-8\r\n` +
-    `Content-Transfer-Encoding: base64\r\n` +
-    `\r\n` +
-    `${btoa(unescape(encodeURIComponent(htmlBody)))}\r\n` +
-    `\r\n` +
-    `--${boundary}--`;
+  // Build the raw RFC 2822 message. The parts use Content-Transfer-Encoding: 8bit
+  // (raw UTF-8) which is valid inside a base64url-encoded outer envelope.
+  const raw = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    `MIME-Version: 1.0`,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    ``,
+    `--${boundary}`,
+    `Content-Type: text/plain; charset=utf-8`,
+    `Content-Transfer-Encoding: 8bit`,
+    ``,
+    plainBody,
+    ``,
+    `--${boundary}`,
+    `Content-Type: text/html; charset=utf-8`,
+    `Content-Transfer-Encoding: 8bit`,
+    ``,
+    htmlBody,
+    ``,
+    `--${boundary}--`,
+  ].join("\r\n");
 
   const r = await gfetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts", {
     method: "POST",

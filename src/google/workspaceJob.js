@@ -31,19 +31,21 @@ async function fetchDriveLink(fileId) {
 
 async function composeDraft(aiFn, title, instructions, noteContext) {
   const system =
-    `You are drafting a professional email for the user to review and send. ` +
-    `Output GitHub-flavored Markdown — this will be rendered as HTML in Gmail. ` +
-    `Use proper email structure:\n` +
-    `- Open with a professional greeting (e.g. "Hi [Name]," or "Dear [Name],").\n` +
-    `- Use short paragraphs with blank lines between them for readability.\n` +
-    `- Use **bold** for key terms or section headers within paragraphs.\n` +
-    `- Use bullet lists (- item) for enumerating items, steps, or options.\n` +
-    `- Use ## Section headings only if the email is long and has distinct sections.\n` +
-    `- End with a professional sign-off (e.g. "Best regards," followed by a blank line and the sender name if known).\n` +
-    `- No preamble, no meta-commentary — output the email body directly.\n` +
-    `The user MUST review and edit before sending. Do not invent facts not in the notes.`;
+    `You are drafting a professional email body for the user to review and send. ` +
+    `The subject line is set separately — DO NOT include "Subject: ..." or any metadata header at the top. ` +
+    `DO NOT add a "---" separator or any divider lines. ` +
+    `Start DIRECTLY with the greeting.\n\n` +
+    `Output GitHub-flavored Markdown — it will be rendered as styled HTML in Gmail:\n` +
+    `- Open with a professional greeting line (e.g. "Hi [Name]," or "Dear [Name],").\n` +
+    `- Use short paragraphs separated by blank lines.\n` +
+    `- Use **bold** for key terms or emphasis.\n` +
+    `- Use bullet lists (- item) when listing multiple items.\n` +
+    `- Use ## Section heading only if the email is long and needs clear sections.\n` +
+    `- Close with a sign-off on its own line (e.g. "Best regards,") then a blank line and the sender name.\n` +
+    `- No preamble, no meta-commentary, no "Subject:" line — email body only.\n` +
+    `The user MUST review before sending. Do not invent facts not present in the notes.`;
   const user =
-    `Email subject: ${title}\n\nInstructions:\n${instructions}\n\nContext from notes:\n${noteContext.slice(0, 8000)}\n\nWrite the email body now.`;
+    `Email subject: ${title}\n\nInstructions:\n${instructions}\n\nContext from notes:\n${noteContext.slice(0, 8000)}\n\nWrite the email body now (start with the greeting):`;
   const t = await aiFn(system, user, 4000);
   return (t || "").trim();
 }
