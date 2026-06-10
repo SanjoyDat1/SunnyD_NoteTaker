@@ -106,6 +106,18 @@ async function ai(provider, apiKey, system, user, max = 900) {
   throw new Error("Unknown provider: " + provider);
 }
 
+/** Map raw provider errors to a short, actionable message for the UI. */
+function friendlyAiError(e) {
+  const m = (e?.message || "").toLowerCase();
+  if (m.includes("api key") || m.includes("401") || m.includes("unauthorized") || m.includes("invalid x-api-key") || m.includes("incorrect api key"))
+    return "API key was rejected — update it via “Change key” in the header.";
+  if (m.includes("429") || m.includes("rate limit") || m.includes("quota") || m.includes("overloaded"))
+    return "Rate limit reached — suggestions resume on your next pause.";
+  if (m.includes("network"))
+    return "Network issue — check your connection.";
+  return "AI request failed — it will retry on your next pause.";
+}
+
 /* ─── Study podcast (dialogue TTS, browser-only) ──────────────────────────── */
 
 const PODCAST_TTS_MODEL_PRIMARY = "gpt-4o-mini-tts";
@@ -3127,6 +3139,17 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 }
 
 ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:var(--rule2);border-radius:10px;}
+
+/* ── AI error surfacing ── */
+.hdr-pill.err{border-color:rgba(190,72,67,.45);background:linear-gradient(180deg,#fdf6f5,#faeeec);color:#9c3f39;cursor:pointer;}
+.hdr-pill.err .hdr-dot{background:#be4843;}
+.ann-error{border:1px solid rgba(190,72,67,.28);background:#fdf6f5;border-radius:10px;color:#7c3934;}
+.ann-error span{color:#8a4540;}
+.ann-retry-btn{display:inline-block;margin-top:9px;padding:4px 14px;border-radius:999px;border:1px solid rgba(190,72,67,.4);background:#fff;color:#9c3f39;font-size:11px;font-weight:600;cursor:pointer;transition:background .18s ease,border-color .18s;}
+.ann-retry-btn:hover{background:#faeeec;border-color:rgba(190,72,67,.6);}
+.lecture-q-error{display:flex;flex-direction:column;gap:8px;align-items:flex-start;padding:12px 14px;margin:10px 0 4px;border:1px solid rgba(190,72,67,.28);background:#fdf6f5;border-radius:10px;color:#7c3934;font-size:12px;line-height:1.45;}
+.lecture-q-retry-btn{padding:4px 14px;border-radius:999px;border:1px solid rgba(190,72,67,.4);background:#fff;color:#9c3f39;font-size:11px;font-weight:600;cursor:pointer;transition:background .18s ease,border-color .18s;}
+.lecture-q-retry-btn:hover{background:#faeeec;border-color:rgba(190,72,67,.6);}
 `;
 
 /* ─── Providers (shared) ──────────────────────────────────────────────────── */
@@ -3897,6 +3920,11 @@ export default function SunnyDNotes() {
   const [lectureQAdded,  setLectureQAdded]  = useState(false);
   const [lectureQRefreshing, setLectureQRefreshing] = useState(false);
   const [lectureQGenerating, setLectureQGenerating] = useState(false); // auto-generating missing answer
+  const [lectureQError, setLectureQError] = useState(null);            // qId whose answer generation failed
+  const [lectureQRetryNonce, setLectureQRetryNonce] = useState(0);     // bump to re-attempt answer generation
+  const [aiNotice, setAiNotice] = useState(null);                      // surfaced AI failure message (suggestions/fact check)
+  const activeIdRef = useRef(activeId);                                // current note id, readable inside stale async closures
+  useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
   const [lectureQExpanding,  setLectureQExpanding]  = useState(false); // generating long expanded answer
   // Note setup modal — hidden | { pendingId, subject, professor, goal, manualTitle? }; pendingId=null = editing metadata only
   const [noteSetupModal, setNoteSetupModal] = useState(null);
@@ -4932,9 +4960,11 @@ Rules (strict):
   /* ── Auto-generate answer when a question card opens with no answer yet ── */
   useEffect(() => {
     if (!activeLectureQ || activeLectureQ.q.answer) return;
+    let stale = false; // set when the card closes or a different question opens
     const qId = activeLectureQ.q.id;
     const qText = activeLectureQ.q.text;
     setLectureQGenerating(true);
+    setLectureQError(null);
     const noteContext = notes.map(n => `[${n.title}]:\n${htmlToText(n.content).slice(0, 400)}`).join("\n\n");
     ai(
       llmProvider, apiKey,
@@ -4953,15 +4983,16 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
     )
       .then(raw => {
         const m = raw.replace(/```json|```/g, "").trim().match(/\{[\s\S]*\}/);
-        const parsed = m ? JSON.parse(m[0]) : null;
+        const parsed = m ? (() => { try { return JSON.parse(m[0]); } catch { return null; } })() : null;
         const answer = parsed?.answer?.trim() || "";
-        if (!answer) return;
+        if (!answer) { if (!stale) setLectureQError(qId); return; }
         setLectureQs(prev => prev.map(q => q.id === qId ? { ...q, answer } : q));
         setActiveLectureQ(prev => prev?.q.id === qId ? { ...prev, q: { ...prev.q, answer } } : prev);
       })
-      .catch(() => {})
-      .finally(() => setLectureQGenerating(false));
-  }, [activeLectureQ?.q?.id]); // only re-run when a different question is opened
+      .catch(() => { if (!stale) setLectureQError(qId); })
+      .finally(() => { if (!stale) setLectureQGenerating(false); });
+    return () => { stale = true; setLectureQGenerating(false); };
+  }, [activeLectureQ?.q?.id, lectureQRetryNonce]); // re-run on new question or manual retry
 
   /* ── Expand a lecture Q into a long, well-structured answer ── */
   async function expandLectureAnswer(q) {
@@ -5284,6 +5315,7 @@ Return [] if nothing important is missing.`,
       if (dismissed.current.fact.has(t) || checked.current.has(t) || isSimilarToDismissedFact(t)) continue;
       checked.current.add(t);
       setBusy(true); setStatus("Scanning…");
+      setAiNotice(null);
       try {
         const raw = await ai(llmProvider, apiKey,
           `You are SunnyD fact-checker. Find ONLY clear, verifiable factual errors.
@@ -5330,7 +5362,12 @@ Accurate or no real change: {"check":false}`,
           });
           setShownSuggIds(prev => new Set([...prev, sugg.id]));
         }
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        console.error(e);
+        // Un-mark so this sentence can be fact-checked again on the next pause
+        checked.current.delete(t);
+        setAiNotice(friendlyAiError(e));
+      }
       finally { setBusy(false); setStatus(""); }
       break;
     }
@@ -5371,6 +5408,7 @@ Accurate or no real change: {"check":false}`,
     const { maxOther, allowedOther, otherTone } = SUGG_CONFIG[suggFreq] ?? SUGG_CONFIG.balanced;
 
     setBusy(true); setStatus("Analyzing…");
+    setAiNotice(null);
     try {
       const raw = await ai(llmProvider, apiKey,
         `You are SunnyD, an intelligent writing assistant. Analyze the active note and return suggestions.
@@ -5459,6 +5497,7 @@ ${focusNew}`,
     } catch (e) {
       console.error("sugg:", e);
       delete lastScannedContent.current[noteId]; // Allow retry on next pause or note switch
+      setAiNotice(friendlyAiError(e));
     } finally { setBusy(false); setStatus(""); }
   }
 
@@ -5671,6 +5710,10 @@ ${focusNew}`,
   }
   async function runGhost(text, cur) {
     if (ghostBusy.current) return;
+    // Note this completion was requested for — discard the result if the user
+    // switches notes while the request is in flight (Tab would otherwise insert
+    // a continuation of the OLD note into the new one).
+    const ghostNoteId = activeId;
     // Only complete when cursor is at the end of the text
     if (cur < text.length) return;
     // Never suggest after a complete sentence — user just finished; we don't know what they want next
@@ -5689,9 +5732,18 @@ If the fragment could already be a complete sentence (they may have just forgott
         `User paused mid-thought. Complete naturally only if clearly incomplete: "${frag}"`, 120);
       setGhostThinking(false);
       const continuation = c.trim();
-      if (continuation) setGhost({ text: " " + continuation, pos: cur });
+      if (continuation && activeIdRef.current === ghostNoteId) setGhost({ text: " " + continuation, pos: cur });
     } catch { setGhostThinking(false); }
     finally { ghostBusy.current = false; }
+  }
+
+  /** Cancel all pending debounced AI work (ghost, fact check, suggestions, workspace scan).
+      Must be called when the active note changes so stale results never target the new note. */
+  function cancelPendingAiTimers() {
+    clearTimeout(timers.current.t); clearTimeout(timers.current.f);
+    clearTimeout(timers.current.s); clearTimeout(timers.current.ws);
+    setWsScanScheduled(false);
+    setAiNotice(null); // an error from the previous note must not appear to belong to the next one
   }
 
   /* ── Editor onChange handler ── */
@@ -6598,9 +6650,14 @@ Return the rewritten passage only:`;
               </div>
             </div>
             <div className="hdr-mid" aria-label="This note">
-              <div className={`hdr-pill${busy ? " live" : ""}`}>
+              <div
+                className={`hdr-pill${busy ? " live" : ""}${!busy && aiNotice ? " err" : ""}`}
+                title={!busy && aiNotice ? `${aiNotice} (click to dismiss)` : undefined}
+                onClick={!busy && aiNotice ? () => setAiNotice(null) : undefined}
+                role={!busy && aiNotice ? "button" : undefined}
+              >
                 <div className="hdr-dot" aria-hidden />
-                <span>{busy ? statusTxt : "Ready"}</span>
+                <span>{busy ? statusTxt : aiNotice ? "AI issue" : "Ready"}</span>
               </div>
               {browserSupportsSpeechRecognition && (
                 <button
@@ -7315,6 +7372,17 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                     )}
                   </div>
                 </>
+              ) : lectureQError === q.id ? (
+                <div className="lecture-q-error" role="alert">
+                  <span>Couldn’t draft a response — check your AI key or connection.</span>
+                  <button
+                    type="button"
+                    className="lecture-q-retry-btn"
+                    onClick={() => { setLectureQError(null); setLectureQRetryNonce(n => n + 1); }}
+                  >
+                    Try again
+                  </button>
+                </div>
               ) : (
                 <div className="lecture-q-loading"><ThinkDots /><span>Drafting response…</span></div>
               )}
@@ -7334,7 +7402,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
               <button className="search-btn" title={`Search notes (${MOD_KEY}+K)`} onClick={() => setSearchOpen(true)}>Search</button>
             </div>
             {notes.map(n => {
-              const switchNote = () => { setActiveId(n.id); setGhost(null); setGhostThinking(false); setSelMenu(null); setSelThinking(null); setSelRes(null); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); };
+              const switchNote = () => { cancelPendingAiTimers(); setActiveId(n.id); setGhost(null); setGhostThinking(false); setSelMenu(null); setSelThinking(null); setSelRes(null); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); };
               return (
                 <div
                   key={n.id}
@@ -7655,7 +7723,28 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
                   ))}
                 </div>
 
-                {activeSugg.length === 0 && !busy && (
+                {aiNotice && activeSugg.length === 0 && !busy && (
+                  <div className="ann-empty ann-error" role="alert">
+                    <span style={{ display: "block", fontWeight: 600, marginBottom: 5, fontSize: 11.5 }}>
+                      Suggestions paused
+                    </span>
+                    <span>{aiNotice}</span>
+                    <button
+                      type="button"
+                      className="ann-retry-btn"
+                      onClick={() => {
+                        setAiNotice(null);
+                        // Clear the scan gate so retry forces a fresh run even when the
+                        // failure came from the fact checker (which never touches the gate)
+                        delete lastScannedContent.current[activeId];
+                        generateSuggestions(activeId, content, notes);
+                      }}
+                    >
+                      Try again
+                    </button>
+                  </div>
+                )}
+                {!aiNotice && activeSugg.length === 0 && !busy && (
                   <div className="ann-empty">
                     {suggestionsOn ? (
                       <>
@@ -8496,7 +8585,7 @@ Return ONLY valid JSON: {"answer":"1-2 clear, accurate sentences"}`,
       {searchOpen && (
         <SearchPalette
           notes={notes}
-          onSelectNote={id => { setActiveId(id); setGhost(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); }}
+          onSelectNote={id => { cancelPendingAiTimers(); setActiveId(id); setGhost(null); setGhostThinking(false); setHoveredSuggId(null); setDockedCard(null); setPanelHidden(false); }}
           onClose={() => setSearchOpen(false)}
         />
       )}
