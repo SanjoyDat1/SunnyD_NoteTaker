@@ -1808,8 +1808,9 @@ body{background:var(--paper);font-family:'DM Sans',sans-serif;-webkit-font-smoot
 .hdr-ws-act-card{display:flex;align-items:flex-start;gap:12px;padding:11px 10px;margin-bottom:7px;border-radius:12px;border:1px solid rgba(226,217,206,.94);background:rgba(255,253,249,.94);box-shadow:0 1px 2px rgba(42,36,26,.03);transition:background .14s ease,border-color .14s ease,transform .14s;}
 .hdr-ws-act-card:hover{border-color:rgba(26,104,53,.42);background:#fffefb;transform:translateY(-1px);}
 .hdr-ws-act-glyph{
-  flex-shrink:0;width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:11px;font-size:19px;line-height:1;
+  flex-shrink:0;width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:11px;line-height:1;
   background:rgba(232,246,239,.92);border:1px solid rgba(26,104,53,.22);
+  color:rgba(26,104,53,.82);
 }
 .hdr-ws-act-card-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;}
 .hdr-ws-act-card-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;}
@@ -3227,17 +3228,66 @@ function workspaceDeliverableLine(j) {
 }
 
 function workspaceJobGlyph(j) {
-  if (!j || typeof j !== "object") return "·";
+  const sz = 20;
+  if (!j || typeof j !== "object") return (
+    <svg width={sz} height={sz} viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.5" fill="currentColor" opacity=".5"/></svg>
+  );
   const ty = String(j.type || "").toLowerCase();
-  if (ty === "calendar") return "Cal";
-  if (ty === "meeting")  return "Mtg";
+
+  // Calendar
+  if (ty === "calendar") return (
+    <svg width={sz} height={sz} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="14" height="13" rx="2.5"/>
+      <path d="M3 8h14"/>
+      <path d="M7 2v2M13 2v2"/>
+      <circle cx="7" cy="12" r=".9" fill="currentColor" stroke="none"/>
+      <circle cx="10" cy="12" r=".9" fill="currentColor" stroke="none"/>
+      <circle cx="13" cy="12" r=".9" fill="currentColor" stroke="none"/>
+    </svg>
+  );
+
+  // Meeting / people
+  if (ty === "meeting") return (
+    <svg width={sz} height={sz} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="7.5" cy="7" r="2.5"/>
+      <path d="M2 17c0-3 2.5-5 5.5-5"/>
+      <circle cx="13.5" cy="7" r="2.5"/>
+      <path d="M18 17c0-3-2.5-5-5.5-5"/>
+    </svg>
+  );
+
   if (ty === "assignment") {
     const dt = String(j.payload?.deliverableType || "doc").toLowerCase();
-    if (dt === "sheet") return "Sheet";
-    if (dt === "email_draft") return "Email";
-    return "Doc";
+
+    // Spreadsheet / Sheet
+    if (dt === "sheet") return (
+      <svg width={sz} height={sz} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="14" height="14" rx="2.5"/>
+        <path d="M3 8h14M3 13h14M8 3v14"/>
+      </svg>
+    );
+
+    // Email / envelope
+    if (dt === "email_draft") return (
+      <svg width={sz} height={sz} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2.5" y="5" width="15" height="11" rx="2.5"/>
+        <path d="M2.5 7l7.5 5 7.5-5"/>
+      </svg>
+    );
+
+    // Document / Doc
+    return (
+      <svg width={sz} height={sz} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 2h7l4 4v12a1 1 0 01-1 1H5a1 1 0 01-1-1V3a1 1 0 011-1z"/>
+        <path d="M12 2v4h4"/>
+        <path d="M7 9h6M7 12h6M7 15h4"/>
+      </svg>
+    );
   }
-  return "·";
+
+  return (
+    <svg width={sz} height={sz} viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.5" fill="currentColor" opacity=".5"/></svg>
+  );
 }
 
 function formatWorkspaceRelativeTime(ts) {
@@ -3375,27 +3425,91 @@ const InsertedHighlightExtension = Extension.create({
 /* Find a text string in a ProseMirror doc, return {from, to} doc positions */
 function findTextInDoc(doc, searchText) {
   if (!searchText) return null;
+
+  // Build flat text + ProseMirror position for every char.
+  // We insert a single space between block nodes so textRefs that span a
+  // paragraph break (from editor.getText("\n")) can still be matched after
+  // whitespace normalisation.
   let text = "";
-  const positions = [];
+  const positions = []; // positions[i] → ProseMirror pos of text[i]
+  let lastBlockEnd = -1;
   doc.descendants((node, pos) => {
+    if (node.isBlock && !node.isLeaf) {
+      // Insert a synthetic space at block boundaries so cross-block phrases match
+      if (lastBlockEnd !== -1 && text.length > 0 && text[text.length - 1] !== " ") {
+        text += " ";
+        positions.push(pos); // approximate — used only for whitespace
+      }
+      lastBlockEnd = pos + node.nodeSize;
+    }
     if (node.isText) {
-      for (let i = 0; i < (node.text || "").length; i++) {
-        text += node.text[i];
+      const t = node.text || "";
+      for (let i = 0; i < t.length; i++) {
+        text += t[i];
         positions.push(pos + i);
       }
     }
   });
-  // Try direct match first, then normalised whitespace match
-  let idx = text.indexOf(searchText);
-  if (idx === -1) {
-    const norm = s => s.replace(/\s+/g, " ").trim();
-    const normNeedle = norm(searchText);
-    const normHaystack = norm(text);
-    idx = normHaystack.indexOf(normNeedle);
+
+  /** Build normalized string + mapping from each norm-char index → original index */
+  function buildNorm(s) {
+    let normStr = "";
+    const toOrig = [];
+    let i = 0;
+    while (i < s.length) {
+      if (/\s/.test(s[i])) {
+        normStr += " ";
+        toOrig.push(i);
+        while (i < s.length && /\s/.test(s[i])) i++;
+      } else {
+        normStr += s[i];
+        toOrig.push(i);
+        i++;
+      }
+    }
+    return { normStr, toOrig };
   }
-  if (idx === -1 || idx >= positions.length) return null;
-  const endIdx = Math.min(idx + searchText.length - 1, positions.length - 1);
-  return { from: positions[idx], to: positions[endIdx] + 1 };
+
+  const safeRange = (origStart, origEnd) => {
+    if (origStart < 0 || origStart >= positions.length) return null;
+    const safeEnd = Math.min(origEnd, positions.length - 1);
+    return { from: positions[origStart], to: positions[safeEnd] + 1 };
+  };
+
+  // 1. Direct exact match
+  const directIdx = text.indexOf(searchText);
+  if (directIdx !== -1) return safeRange(directIdx, directIdx + searchText.length - 1);
+
+  // 2. Normalised whitespace match (handles \n from editor.getText(), extra spaces, etc.)
+  const { normStr: normHaystack, toOrig } = buildNorm(text);
+  const normNeedle = searchText.replace(/\s+/g, " ").trim();
+  if (normNeedle) {
+    const normIdx = normHaystack.indexOf(normNeedle);
+    if (normIdx !== -1) {
+      const origStart = toOrig[normIdx];
+      const normEndIdx = normIdx + normNeedle.length - 1;
+      const origEnd = normEndIdx < toOrig.length ? toOrig[normEndIdx] : origStart + searchText.length - 1;
+      return safeRange(origStart, origEnd);
+    }
+  }
+
+  // 3. Fuzzy prefix fallback — try the first ~60 chars (handles LLM textRef truncation)
+  if (searchText.length > 15) {
+    const prefix = searchText.slice(0, 60).trim();
+    const prefixIdx = text.indexOf(prefix);
+    if (prefixIdx !== -1) return safeRange(prefixIdx, prefixIdx + prefix.length - 1);
+
+    const normPrefix = prefix.replace(/\s+/g, " ").trim();
+    const normPrefIdx = normHaystack.indexOf(normPrefix);
+    if (normPrefIdx !== -1) {
+      const origStart = toOrig[normPrefIdx];
+      const normEnd   = normPrefIdx + normPrefix.length - 1;
+      const origEnd   = normEnd < toOrig.length ? toOrig[normEnd] : origStart + prefix.length - 1;
+      return safeRange(origStart, origEnd);
+    }
+  }
+
+  return null;
 }
 
 /* ─── NoteEditor ─────────────────────────────────────────────────────────── */
@@ -3419,10 +3533,30 @@ const NoteEditor = forwardRef(function NoteEditor({ content, onChange, onKeyDown
     insertAtCursor(text) {
       editor?.commands.insertContent(text);
     },
-    /* Append rich HTML at the very end of the document (moves cursor there first) */
+    /**
+     * Append HTML at the very end of the document, staying consistent with
+     * the document's trailing node type. If the document ends with a list,
+     * block-level content is inserted after the list (not inside it).
+     */
     appendContent(html) {
       if (!editor) return;
-      editor.chain().focus("end").insertContent(html).run();
+      const doc = editor.state.doc;
+      const lastChild = doc.lastChild;
+      const lastType = lastChild?.type?.name;
+
+      // If last node is a list and we're appending a block, place after the list
+      if ((lastType === "bulletList" || lastType === "orderedList") &&
+          /^<(p|h[1-6]|ul|ol|pre|div)\b/i.test((html || "").trim())) {
+        const endPos = doc.content.size - 1; // position inside last child
+        const afterListPos = doc.nodeSize - 2; // position right after last child in doc
+        try {
+          editor.commands.insertContentAt(afterListPos, html);
+        } catch {
+          editor.chain().focus("end").insertContent(html).run();
+        }
+      } else {
+        editor.chain().focus("end").insertContent(html).run();
+      }
     },
     getSelection() {
       if (!editor) return "";
@@ -3448,35 +3582,134 @@ const NoteEditor = forwardRef(function NoteEditor({ content, onChange, onKeyDown
       const range = findTextInDoc(editor.state.doc, textRef);
       if (range) {
         editor.view.dispatch(editor.state.tr.setMeta(hoverHlKey, range));
+        // Gently scroll the highlighted text into view without stealing focus
+        try {
+          const coords = editor.view.coordsAtPos(range.from);
+          const editorDom = editor.view.dom.closest(".ta-wrap") || editor.view.dom;
+          const domRect = editorDom.getBoundingClientRect();
+          if (coords.top < domRect.top + 40 || coords.top > domRect.bottom - 60) {
+            editor.view.dom.closest(".note-editor, .ta-wrap")
+              ?.scrollTo({ top: editor.view.dom.closest(".note-editor, .ta-wrap").scrollTop + (coords.top - domRect.top - 120), behavior: "smooth" });
+          }
+        } catch { /* scroll is best-effort */ }
+      } else {
+        // No match found — clear any stale highlight
+        editor.view.dispatch(editor.state.tr.setMeta(hoverHlKey, null));
       }
     },
     clearHoverHighlight() {
       if (!editor) return;
       editor.view.dispatch(editor.state.tr.setMeta(hoverHlKey, null));
     },
-    /* Surgically replace oldText with replacementHTML in the editor */
+    /**
+     * Return the HTML of the block node that contains anchorText,
+     * so the LLM can see the exact surrounding formatting.
+     */
+    getNodeContextHTML(anchorText) {
+      if (!editor || !anchorText) return "";
+      const range = findTextInDoc(editor.state.doc, anchorText);
+      if (!range) return "";
+      try {
+        const $pos = editor.state.doc.resolve(range.from);
+        // Walk up to the nearest block node
+        for (let d = $pos.depth; d >= 1; d--) {
+          const node = $pos.node(d);
+          if (node.isBlock && node.type.name !== "doc") {
+            const div = document.createElement("div");
+            div.innerHTML = editor.getHTML();
+            // Fall back to whole doc HTML — caller will use it for context
+            break;
+          }
+        }
+        // Return the full editor HTML; caller can slice around textRef
+        return editor.getHTML();
+      } catch { return ""; }
+    },
+    /**
+     * Surgically replace oldText with replacement content.
+     * Detects whether the range is INLINE (within a paragraph) or spans a full block,
+     * and avoids wrapping inline replacements in a new <p> block.
+     */
     findAndReplaceText(oldText, replacementHTML) {
       if (!editor || !oldText) return false;
       const range = findTextInDoc(editor.state.doc, oldText);
       if (!range) return false;
-      editor.chain().deleteRange(range).insertContentAt(range.from, replacementHTML).run();
+      try {
+        const $from = editor.state.doc.resolve(range.from);
+        const $to   = editor.state.doc.resolve(range.to);
+        // If both endpoints are in the same paragraph/listItem, this is an inline replacement.
+        // Use the text content without block wrappers so we don't create a new paragraph.
+        const sameParent = $from.parent === $to.parent;
+        if (sameParent && $from.parent.type.name !== "doc") {
+          // Strip outer block tags (<p>…</p>, <h1>…</h1>, etc.) to get inline content
+          const inlineHtml = replacementHTML
+            .replace(/^<(p|h[1-6]|div)[^>]*>([\s\S]*?)<\/\1>$/i, "$2")
+            .trim();
+          editor.chain().focus().deleteRange(range).insertContentAt(range.from, inlineHtml || replacementHTML).run();
+        } else {
+          editor.chain().deleteRange(range).insertContentAt(range.from, replacementHTML).run();
+        }
+      } catch {
+        editor.chain().deleteRange(range).insertContentAt(range.from, replacementHTML).run();
+      }
       return true;
     },
-    /* Insert HTML content immediately after the block node that contains anchorText.
-       We resolve range.to to find its parent top-level block (paragraph, heading, etc.)
-       and insert AFTER that whole block — never mid-paragraph. */
+    /**
+     * Insert HTML content after the block/listItem that contains anchorText.
+     * Context-aware: if anchor is inside a list, new content is inserted as a
+     * sibling list item so the list structure is preserved.
+     */
     insertAfterText(anchorText, insertionHTML) {
       if (!editor || !anchorText) return false;
       const range = findTextInDoc(editor.state.doc, anchorText);
       if (!range) return false;
       try {
         const $to = editor.state.doc.resolve(range.to);
-        // $to.after(depth) = position right after the node at that depth.
-        // depth=1 is always the top-level block inside the document (paragraph, heading, list…).
-        const insertPos = $to.depth >= 1 ? $to.after(1) : range.to;
-        editor.commands.insertContentAt(insertPos, insertionHTML);
+
+        // Detect if anchor is inside a list and find list/listItem depths
+        let listDepth = -1;
+        let listType = null;
+        for (let d = $to.depth; d >= 1; d--) {
+          const name = $to.node(d).type.name;
+          if (name === "bulletList" || name === "orderedList") {
+            listDepth = d;
+            listType = name;
+            break;
+          }
+        }
+
+        if (listDepth >= 0) {
+          // Anchor is inside a list. Decide whether the content belongs inside or after.
+          // Only wrap as a listItem if content is simple (single paragraph or inline text).
+          // Complex content (headings, multiple blocks, nested lists) goes AFTER the list.
+          const hasHeadings    = /<h[1-6]\b/i.test(insertionHTML);
+          const blockCount     = (insertionHTML.match(/<(p|h[1-6]|ul|ol|pre)\b/gi) || []).length;
+          const isSimpleBlock  = !hasHeadings && blockCount <= 1;
+
+          if (isSimpleBlock) {
+            const liDepth = listDepth + 1;
+            const afterLiPos = liDepth <= $to.depth ? $to.after(liDepth) : $to.after(listDepth);
+            const isAlreadyBlock = /^<(p|ul|ol|pre)\b/i.test(insertionHTML.trim());
+            const wrappedForList = isAlreadyBlock
+              ? `<li>${insertionHTML}</li>`
+              : `<li><p>${insertionHTML}</p></li>`;
+            try {
+              editor.commands.insertContentAt(afterLiPos, wrappedForList);
+            } catch {
+              const afterListPos = $to.after(listDepth);
+              editor.commands.insertContentAt(afterListPos, insertionHTML);
+            }
+          } else {
+            // Multi-block or heading content — insert after the entire list
+            const afterListPos = $to.after(listDepth);
+            editor.commands.insertContentAt(afterListPos, insertionHTML);
+          }
+        } else {
+          // Not in a list — insert after the top-level block
+          const insertPos = $to.depth >= 1 ? $to.after(1) : range.to;
+          editor.commands.insertContentAt(insertPos, insertionHTML);
+        }
       } catch {
-        // Fallback: insert at range.to if resolve fails
         editor.commands.insertContentAt(range.to, insertionHTML);
       }
       return true;
@@ -4240,7 +4473,8 @@ export default function SunnyDNotes() {
       clearTimeout(timers.current.s);
       clearTimeout(timers.current.ws);
       timers.current.s = setTimeout(() => {
-        generateSuggestions(activeId, notes.find(n => n.id === activeId)?.content || "", notes);
+        const rawContent = notes.find(n => n.id === activeId)?.content || "";
+        generateSuggestions(activeId, htmlToText(rawContent), notes);
       }, 400);
     }
   };
@@ -4850,7 +5084,7 @@ Rules (strict):
     if (!browserSupportsSpeechRecognition) return;
     if (lectureOn && !lecturePaused) {
       SpeechRecognition.startListening({ continuous: true, language: "en-US" });
-      // Tick duration counter every second while recording
+      // Tick duration counter every second while listening
       lectureTimerRef.current = setInterval(() => setLectureSecs(s => s + 1), 1000);
     } else if (lectureOn && lecturePaused) {
       SpeechRecognition.stopListening();
@@ -4874,6 +5108,19 @@ Rules (strict):
       if (lectureOn) SpeechRecognition.stopListening();
     };
   }, [lectureOn, lecturePaused, browserSupportsSpeechRecognition]);
+
+  /* ── Watchdog: Web Speech API can silently drop while continuous — restart it ── */
+  useEffect(() => {
+    if (!lectureOn || lecturePaused || !browserSupportsSpeechRecognition) return;
+    // `listening` just went false while we expect it to be on — restart after a brief delay
+    if (!listening) {
+      const t = setTimeout(() => {
+        // Double-check state is still active before restarting
+        SpeechRecognition.startListening({ continuous: true, language: "en-US" });
+      }, 500);
+      return () => clearTimeout(t);
+    }
+  }, [listening, lectureOn, lecturePaused, browserSupportsSpeechRecognition]);
 
   /* ── On mount: try to load notes from disk file if we have a saved handle ── */
   useEffect(() => {
@@ -5862,7 +6109,7 @@ If the fragment could already be a complete sentence (they may have just forgott
     const ctxAfter = content.slice(end, Math.min(content.length, end + LOCAL));
     const lecHint = ((finalTranscript || "").trim().slice(-1800)).trim();
     const lecExtra = lecHint
-      ? `\n\nRelated lecture transcript (recent, for grounding — prioritize note text if conflict):\n"""${lecHint}"""${lectureOn ? "\n(Lecture recording active.)" : ""}`
+      ? `\n\nRelated lecture transcript (recent, for grounding — prioritize note text if conflict):\n"""${lecHint}"""${lectureOn ? "\n(Lecture listening active.)" : ""}`
       : "";
     // Show thinking pill at same spot as toolbar, then hide toolbar
     setSelMenu(null);
@@ -5966,8 +6213,8 @@ Context after selection:
         clearTimeout(timers.current.s);
         clearTimeout(timers.current.ws);
         setWsScanScheduled(false);
-        setTimeout(() => runFactCheck(editorRef.current?.getEditorContent() || content), 1500);
-        setTimeout(() => generateSuggestions(activeId, editorRef.current?.getEditorContent() || content, notes), 2500);
+        setTimeout(() => runFactCheck(htmlToText(editorRef.current?.getEditorContent() || "") || content), 1500);
+        setTimeout(() => generateSuggestions(activeId, htmlToText(editorRef.current?.getEditorContent() || "") || content, notes), 2500);
       }
     };
 
@@ -6003,45 +6250,58 @@ Context after selection:
     // ── Fact / clarity: ask LLM to rewrite ONLY the affected passage ─────────
     setStatus("Weaving suggestion into notes…");
     try {
-      // Pull surrounding context so the rewrite blends in seamlessly
+      // Get the actual HTML context around the passage so the LLM can see real formatting
+      const fullHtml = editorRef.current?.getNodeContextHTML(textRef) || "";
+      const refIdx = fullHtml.indexOf(textRef || "");
+      const htmlCtxBefore = refIdx > 0 ? fullHtml.slice(Math.max(0, refIdx - 300), refIdx) : "";
+      const htmlCtxAfter  = refIdx >= 0 ? fullHtml.slice(refIdx + (textRef || "").length, refIdx + (textRef || "").length + 300) : "";
+
+      // Also pull plain-text surrounding context for tone/voice matching
       const refStart = content.indexOf(textRef || "");
-      const ctxBefore = refStart > 0  ? content.slice(Math.max(0, refStart - 180), refStart).trim()             : "";
+      const ctxBefore = refStart > 0  ? content.slice(Math.max(0, refStart - 180), refStart).trim() : "";
       const ctxAfter  = refStart >= 0 ? content.slice(refStart + (textRef || "").length, refStart + (textRef || "").length + 180).trim() : "";
+
       const surroundBlock = [
-        ctxBefore && `Text immediately BEFORE the passage:\n"${ctxBefore}"`,
-        ctxAfter  && `Text immediately AFTER the passage:\n"${ctxAfter}"`,
+        ctxBefore && `Plain text BEFORE: "${ctxBefore}"`,
+        ctxAfter  && `Plain text AFTER: "${ctxAfter}"`,
+        htmlCtxBefore && `HTML context BEFORE (shows formatting): ${htmlCtxBefore.slice(0, 200)}`,
+        htmlCtxAfter  && `HTML context AFTER (shows formatting): ${htmlCtxAfter.slice(0, 200)}`,
       ].filter(Boolean).join("\n\n");
 
       let systemPrompt, userPrompt;
       if (s.cat === "fact") {
         systemPrompt = `You are a writing assistant making a surgical factual correction inside a student's notes.
 Return ONLY the corrected passage — no preamble, no explanation, no quotes around it.
-CRITICAL FLOW RULES:
-- Match the EXACT tone, voice, and formatting of the original passage (casual/formal, bullets/prose, tense).
-- Your replacement must be a seamless drop-in — it should read as if the student wrote it themselves.
+CRITICAL RULES:
+- Match the EXACT tone, voice, and inline formatting of the original passage.
+- If the original uses **bold**, *italic*, or \`code\` markdown, preserve that in your output.
+- If the HTML context shows <strong>, <em>, or <code> tags, match that formatting using markdown (**bold**, *italic*).
+- Your replacement must be a seamless drop-in — same length, same style.
 - Do NOT change sentence structure beyond what is needed for the factual fix.
-- Do NOT add new information, headings, or sections not present in the original.
-- Only use markdown if the original passage already uses markdown.`;
+- Do NOT add headings, new paragraphs, or new sections.
+- Output plain text or inline markdown ONLY — no block-level HTML or markdown headings.`;
         userPrompt = `${surroundBlock}${surroundBlock ? "\n\n" : ""}Original passage: "${textRef}"
 Factual correction needed: ${s.detail}
-Suggested corrected text (use as a guide, adapt to fit naturally): ${s.apply || s.detail}
-Return the corrected passage only:`;
+Suggested corrected text (guide only): ${s.apply || s.detail}
+Return the corrected passage only (plain text with inline markdown if needed):`;
       } else {
         systemPrompt = `You are a writing assistant making a clarity improvement inside a student's notes.
 Return ONLY the rewritten passage — no preamble, no explanation, no quotes around it.
-CRITICAL FLOW RULES:
-- Match the EXACT tone, voice, and formatting of the original passage (casual/formal, bullets/prose, tense).
-- Your rewrite must be a seamless drop-in — it should read as if the student wrote it themselves.
-- Preserve the original length as closely as possible. Do NOT expand into multiple paragraphs.
-- Do NOT add headings or new sections. Do NOT change the topic or add new information.
-- Only use markdown if the original passage already uses markdown.`;
+CRITICAL RULES:
+- Match the EXACT tone, voice, and inline formatting of the original passage.
+- If the original uses **bold**, *italic*, or \`code\` markdown, preserve that in your output.
+- If the HTML context shows <strong>, <em>, or <code> tags, match that formatting using markdown (**bold**, *italic*).
+- Preserve the original length. Do NOT expand into multiple paragraphs.
+- Do NOT add headings or new sections. Do NOT introduce new information.
+- Output plain text or inline markdown ONLY — no block-level HTML or markdown headings.`;
         userPrompt = `${surroundBlock}${surroundBlock ? "\n\n" : ""}Original passage: "${textRef}"
 Clarity suggestion: ${s.detail}
-Return the rewritten passage only:`;
+Return the rewritten passage only (plain text with inline markdown if needed):`;
       }
 
       const replacement = await ai(llmProvider, apiKey, systemPrompt, userPrompt, 600);
       if (replacement.trim() && textRef) {
+        // For inline replacements, use mdToHtml which preserves bold/italic marks
         const ok = editorRef.current?.findAndReplaceText(textRef, mdToHtml(replacement.trim()));
         if (!ok) editorRef.current?.appendContent(mdToHtml(replacement.trim()));
       } else if (replacement.trim()) {
@@ -6673,7 +6933,7 @@ Return the rewritten passage only:`;
                       <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="currentColor" opacity=".7"/></svg>
                     </span>
                   )}
-                  <span>{lectureOn ? (lecturePaused ? "Paused" : "Recording") : "Lecture"}</span>
+                  <span>{lectureOn ? (lecturePaused ? "Paused" : "Listening") : "Lecture"}</span>
                 </button>
               )}
             </div>
