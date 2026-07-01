@@ -3184,6 +3184,30 @@ button:disabled{opacity:.55;cursor:not-allowed;}
 *::-webkit-scrollbar-thumb{background:var(--rule2);border-radius:99px;}
 *::-webkit-scrollbar-thumb:hover{background:var(--ink3);}
 *::-webkit-scrollbar-track{background:transparent;}
+/* Rich-text content that TipTap emits but had no styles */
+.note-editor blockquote{
+  margin:.7rem 0;padding:.35rem 0 .35rem 1rem;
+  border-left:3px solid rgba(94,56,160,.35);color:var(--ink2);font-style:italic;
+  background:linear-gradient(90deg,rgba(94,56,160,.05),transparent 70%);border-radius:0 6px 6px 0;
+}
+.note-editor code{
+  background:rgba(94,56,160,.08);color:#4c2d74;border-radius:4px;
+  padding:.1em .35em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em;
+}
+.note-editor pre code{background:transparent;color:inherit;padding:0;}
+.note-editor pre{background:#241812;color:#e8ddd2;}
+.note-editor hr{border:none;height:1px;background:var(--rule2);margin:1.2rem 0;}
+.note-editor strong{color:var(--ink);font-weight:700;}
+.note-editor ::selection{background:rgba(237,127,33,.28);}
+/* Modals settle in instead of appearing instantly */
+.note-setup-modal,.ws-modal{animation:modalPop .22s cubic-bezier(.22,1,.36,1) both;}
+@keyframes modalPop{from{opacity:0;transform:translateY(10px) scale(.97)}to{opacity:1;transform:none}}
+/* Toolbar buttons pick up the shared focus/hover language */
+.editor-toolbar{position:sticky;top:0;z-index:5;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);border-radius:6px 6px 0 0;}
+.editor-toolbar-btn{color:var(--ink2);transition:background .14s ease,color .14s ease;}
+.editor-toolbar-btn:hover{color:var(--ink);}
+/* Empty-editor placeholder reads as an invitation, not missing data */
+.note-editor .ProseMirror p.is-editor-empty:first-child::before{font-style:italic;}
 /* Respect users who turn animations off */
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;}
