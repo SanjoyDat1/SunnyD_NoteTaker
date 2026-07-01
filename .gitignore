@@ -19,6 +19,7 @@ yarn-error.log*
 # Editor
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 
@@ -28,3 +29,6 @@ Thumbs.db
 
 # Vite
 *.local
+
+# Sync server SQLite data
+server/data/

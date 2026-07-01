@@ -20,16 +20,21 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "server": "node server/index.js"
   },
   "dependencies": {
     "@tiptap/extension-placeholder": "^3.20.2",
     "@tiptap/pm": "^3.20.2",
     "@tiptap/react": "^3.20.2",
     "@tiptap/starter-kit": "^3.20.2",
+    "better-sqlite3": "^11.8.1",
+    "cors": "^2.8.5",
     "docx": "^9.6.1",
+    "express": "^4.21.2",
     "file-saver": "^2.0.5",
     "kokoro-js": "^1.2.1",
+    "pg": "^8.22.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-speech-recognition": "^4.0.1"
