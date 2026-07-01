@@ -2062,7 +2062,7 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .editor-toolbar{display:flex;gap:4px;padding:6px 8px;border-bottom:1px solid rgba(0,0,0,.1);margin-bottom:4px;}
 .editor-toolbar-btn{padding:4px 10px;border-radius:4px;border:1px solid transparent;background:transparent;cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;}
 .editor-toolbar-btn:hover{background:rgba(0,0,0,.06);}
-.editor-toolbar-btn.active{background:rgba(37,99,235,.12);color:#2563eb;}
+.editor-toolbar-btn.active{background:rgba(94,56,160,.12);color:#5E38A0;}
 /* Selection result bar — kept for legacy compat but hidden by new design */
 .sel-result-bar{display:none;}
 /* Weave inline pill — anchored to the affected passage */
@@ -3160,6 +3160,34 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .lecture-q-error{display:flex;flex-direction:column;gap:8px;align-items:flex-start;padding:12px 14px;margin:10px 0 4px;border:1px solid rgba(190,72,67,.28);background:#fdf6f5;border-radius:10px;color:#7c3934;font-size:12px;line-height:1.45;}
 .lecture-q-retry-btn{padding:4px 14px;border-radius:999px;border:1px solid rgba(190,72,67,.4);background:#fff;color:#9c3f39;font-size:11px;font-weight:600;cursor:pointer;transition:background .18s ease,border-color .18s;}
 .lecture-q-retry-btn:hover{background:#faeeec;border-color:rgba(190,72,67,.6);}
+
+/* ── Design-system polish layer (docs/design.md) ─────────────────────────── */
+:root{
+  --primary:#5E38A0;
+  --primary-soft:rgba(94,56,160,.12);
+  --accent:#ed7f21;
+}
+/* Text selection matches the warm palette instead of browser default blue */
+::selection{background:rgba(237,127,33,.28);color:var(--ink);}
+/* Keyboard accessibility: one consistent, visible focus ring everywhere */
+:where(button,[role="button"],a,input,textarea,select,[contenteditable]):focus-visible{
+  outline:2px solid var(--primary);outline-offset:2px;border-radius:4px;
+}
+:where(button,input,textarea,select):focus:not(:focus-visible){outline:none;}
+/* Buttons: consistent tactile response without per-class duplication */
+button{transition:background .16s ease,border-color .16s ease,box-shadow .16s ease,transform .12s ease;}
+button:not(:disabled):active{transform:translateY(1px);}
+button:disabled{opacity:.55;cursor:not-allowed;}
+/* Thin warm scrollbars instead of heavy OS chrome */
+*{scrollbar-width:thin;scrollbar-color:var(--rule2) transparent;}
+*::-webkit-scrollbar{width:8px;height:8px;}
+*::-webkit-scrollbar-thumb{background:var(--rule2);border-radius:99px;}
+*::-webkit-scrollbar-thumb:hover{background:var(--ink3);}
+*::-webkit-scrollbar-track{background:transparent;}
+/* Respect users who turn animations off */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;}
+}
 `;
 
 /* ─── Providers (shared) ──────────────────────────────────────────────────── */
