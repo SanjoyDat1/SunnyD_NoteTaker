@@ -20,6 +20,15 @@ import { plainTextMatchesSourceQuote } from "./src/google/workspaceQuotes.js";
 import { hasIdempotency, setIdempotency, saveJob, listJobs, getJob } from "./src/google/db.js";
 import { resumePendingAssignmentJobs } from "./src/google/workspaceJob.js";
 import { buildSelectionAgentBundle, buildLectureOnlyAgentBundle } from "./src/selectionAgentContext.js";
+import { isSyncEnabled, fetchNotesFromServer, pushNotesToServer } from "./src/sync/notesApi.js";
+import { sanitizeRemoteNotes } from "./src/sync/sanitizeHtml.js";
+import {
+  fetchSyncConfig,
+  validateSyncSession,
+  logoutSyncAccount,
+  getSyncUser,
+} from "./src/sync/syncAuth.js";
+import { SyncLoginScreen } from "./src/sync/SyncLoginScreen.jsx";
 
 /* ─── LLM: OpenAI · Claude · Gemini ─────────────────────────────────────── */
 // Lightest/fastest model per provider as of March 2026
@@ -4436,6 +4445,13 @@ export default function SunnyDNotes() {
   const scannedLectureSuggRef = useRef(""); // transcript already used for lecture suggestions
   const fileHandleRef = useRef(null);
   const diskSaveTimeoutRef = useRef(null);
+  const syncSaveTimeoutRef = useRef(null);
+  const syncHydratedRef = useRef(!isSyncEnabled());
+  const syncPreHydrationEditRef = useRef(false); // user edited while hydration fetch was in flight
+  const notesSaveRunsRef = useRef(0);
+  const [syncAuthMode, setSyncAuthMode] = useState(() => (isSyncEnabled() ? null : "legacy"));
+  const [syncSessionReady, setSyncSessionReady] = useState(() => !isSyncEnabled());
+  const [syncUser, setSyncUser] = useState(() => getSyncUser());
 
   const saveKeys = (provider, key) => {
     try {
@@ -5122,9 +5138,87 @@ Rules (strict):
     }
   }, [listening, lectureOn, lecturePaused, browserSupportsSpeechRecognition]);
 
+  /* ── Sync auth: legacy shared secret vs per-user JWT (ADR-009) ── */
+  useEffect(() => {
+    if (!isSyncEnabled()) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await fetchSyncConfig();
+        if (cancelled) return;
+        setSyncAuthMode(cfg.authMode);
+        if (cfg.authMode === "legacy") {
+          setSyncSessionReady(true);
+          return;
+        }
+        const ok = await validateSyncSession();
+        if (!cancelled) {
+          setSyncSessionReady(ok);
+          if (ok) setSyncUser(getSyncUser());
+        }
+      } catch {
+        if (!cancelled) {
+          setSyncAuthMode("legacy");
+          setSyncSessionReady(true);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  /* ── On mount: hydrate from sync server when configured (localStorage is live cache) ── */
+  useEffect(() => {
+    if (!isSyncEnabled() || !syncSessionReady) return undefined;
+    syncHydratedRef.current = false;
+    let cancelled = false;
+    (async () => {
+      try {
+        const remote = await fetchNotesFromServer();
+        if (cancelled) return;
+        // Synced content crosses an account boundary — strip script vectors before render
+        const remoteNotes = remote?.notes?.length ? sanitizeRemoteNotes(remote.notes) : [];
+        if (remoteNotes.length && !syncPreHydrationEditRef.current) {
+          // Server stores active_id as text — match loosely, keep the note's own id type
+          const activeMatch = remote.activeId != null
+            ? remoteNotes.find(n => String(n.id) === String(remote.activeId))
+            : null;
+          const active = activeMatch ? activeMatch.id : remoteNotes[0].id;
+          setNotes(remoteNotes);
+          setActiveId(active);
+          saveNotes(remoteNotes);
+          saveActiveId(active);
+        } else {
+          // No remote snapshot, or the user typed while the fetch was in flight:
+          // keep local edits, merge in any remote-only notes, then push the union.
+          const localNotes = loadNotes();
+          const merged = [...localNotes];
+          for (const rn of remoteNotes) {
+            if (!merged.some(n => String(n.id) === String(rn.id))) merged.push(rn);
+          }
+          const localActive = loadActiveId(merged);
+          if (merged.length !== localNotes.length) {
+            setNotes(merged);
+            saveNotes(merged);
+          }
+          await pushNotesToServer(merged, localActive);
+        }
+      } catch (e) {
+        if (e?.code === "SYNC_AUTH") {
+          logoutSyncAccount();
+          setSyncUser(null);
+          setSyncSessionReady(false);
+        }
+        // Server unreachable — keep localStorage as source of truth (ADR-008)
+      } finally {
+        if (!cancelled) syncHydratedRef.current = true;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [syncSessionReady]);
+
   /* ── On mount: try to load notes from disk file if we have a saved handle ── */
   useEffect(() => {
-    if (!supportsFileAccess()) return;
+    if (!supportsFileAccess() || isSyncEnabled()) return;
     let cancelled = false;
     (async () => {
       const handle = await getStoredFileHandle();
@@ -5149,6 +5243,10 @@ Rules (strict):
   useEffect(() => {
     saveNotes(notes);
     setLastSavedAt(Date.now());
+    // First run is the mount itself, not an edit
+    if (++notesSaveRunsRef.current > 1 && isSyncEnabled() && !syncHydratedRef.current) {
+      syncPreHydrationEditRef.current = true;
+    }
     // Generate/update embedding for the active note if content changed
     const currentNote = notes.find(n => n.id === activeId);
     if (currentNote) {
@@ -5165,6 +5263,23 @@ Rules (strict):
     }
   }, [notes]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { saveActiveId(activeId); }, [activeId]);
+  useEffect(() => {
+    if (!isSyncEnabled() || !syncHydratedRef.current) return undefined;
+    clearTimeout(syncSaveTimeoutRef.current);
+    syncSaveTimeoutRef.current = setTimeout(async () => {
+      try {
+        await pushNotesToServer(notes, activeId);
+      } catch (e) {
+        if (e?.code === "SYNC_AUTH") {
+          logoutSyncAccount();
+          setSyncUser(null);
+          setSyncSessionReady(false);
+        }
+        // offline or server error — local cache already saved
+      }
+    }, 800);
+    return () => clearTimeout(syncSaveTimeoutRef.current);
+  }, [notes, activeId]);
   useEffect(() => {
     const handle = fileHandleRef.current;
     if (!handle) return;
@@ -6892,6 +7007,34 @@ Return the rewritten passage only (plain text with inline markdown if needed):`;
   }
 
   if (!apiKey) return <><style>{CSS}</style><KeyScreen onSave={saveKeys} /></>;
+
+  if (isSyncEnabled() && syncAuthMode === null) {
+    return (
+      <>
+        <style>{CSS}</style>
+        <div className="key-screen">
+          <div className="key-card" style={{ textAlign: "center" }}>
+            <span className="key-btn-spinner" aria-hidden />
+            <p className="key-sub" style={{ marginTop: 16 }}>Connecting to sync…</p>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (isSyncEnabled() && syncAuthMode === "jwt" && !syncSessionReady) {
+    return (
+      <>
+        <style>{CSS}</style>
+        <SyncLoginScreen
+          onAuthenticated={user => {
+            setSyncUser(user);
+            setSyncSessionReady(true);
+          }}
+        />
+      </>
+    );
+  }
 
   return (
     <>
