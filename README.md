@@ -118,6 +118,45 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173). On first run you'll see the API key screen: pick a provider, paste your key, and click **Continue**. You can switch provider or update your key anytime via **Change key** in the header.
 
+### Optional: cross-device sync backend
+
+By default SunnyD has **no backend** — notes stay in your browser (ADR-001). If you want notes synced across devices, run the optional sync server (ADR-008, extended by ADR-009):
+
+```bash
+# Terminal 1 — sync API (SQLite by default, port 3001)
+npm run server
+
+# Terminal 2 — frontend
+# Add to .env:
+#   VITE_API_BASE_URL=http://localhost:3001
+npm run dev
+```
+
+**Auth modes** (see [ADR-009](docs/adrs/ADR-009-per-user-sync-auth.md)):
+
+| Mode | Server env | Client |
+|------|------------|--------|
+| **Legacy (v1)** | `SUNNYD_JWT_SECRET` unset; optional `SUNNYD_API_SECRET` | Optional `VITE_SUNNYD_API_SECRET` when secret set |
+| **JWT (v2)** | `SUNNYD_JWT_SECRET` (≥32 chars) | Register/login in app; token in sessionStorage |
+
+For **multi-user / hosted** sync, set `SUNNYD_JWT_SECRET` and optionally `DATABASE_URL` (PostgreSQL). For **single-user self-host**, omit `SUNNYD_JWT_SECRET` (legacy mode).
+
+| Env (server) | Purpose |
+|--------------|---------|
+| `PORT` | Listen port (default `3001`) |
+| `SUNNYD_JWT_SECRET` | Enables per-user JWT auth (v2 multi-tenant) |
+| `SUNNYD_JWT_EXPIRES_SEC` | JWT lifetime in seconds (default 7 days) |
+| `DATABASE_URL` | Optional PostgreSQL URL (default: SQLite at `SUNNYD_DB_PATH`) |
+| `SUNNYD_API_SECRET` | Legacy shared secret (v1 only, when JWT unset) |
+| `SUNNYD_CORS_ORIGIN` | Allowed browser origin (default `http://localhost:5173`) |
+| `SUNNYD_BIND` | Listen address (default `127.0.0.1`; non-localhost requires auth secret or JWT) |
+| `SUNNYD_TRUST_PROXY` | Set `1` only behind a trusted reverse proxy so rate limiting keys on `X-Forwarded-For` |
+| `SUNNYD_DB_PATH` | SQLite file path (default `server/data/sunnyd.db`) |
+
+**API:** `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/notes`, `PUT /api/notes`. LLM keys and Google OAuth tokens are **never** stored on the server.
+
+If the server is down, the app keeps working from `localStorage`.
+
 ### Build for production
 
 ```bash
@@ -141,10 +180,11 @@ The built app is in `dist/`. Serve that folder with any static host (GitHub Page
 | Cast episode length | `sessionStorage` (`sd_cast_max_min`) | 2–10 min |
 | Mini player position | `sessionStorage` (`sd_cast_float_pos`) | Draggable dock coords |
 | Notes (disk file) | JSON file you choose | Opt-in; Chrome/Edge only. |
+| Notes (sync server) | SQLite on **your** sync host | Opt-in when `VITE_API_BASE_URL` is set; see [ADR-008](docs/adrs/ADR-008-optional-sync-backend.md). |
 | Google OAuth tokens | `IndexedDB` (`sunnyd_google_db`) | Only if you connect Workspace; persists until disconnect or site data cleared. |
 | Workspace UI toggles | `sessionStorage` | e.g. `sd_workspace_enabled`, per-feature switches |
 
-There is **no SunnyD backend**: your notes stay in the browser. **LLM providers** receive text only when you use AI features. If you enable **Google Workspace**, your browser also sends data **directly to Google’s APIs** (Calendar, Drive, Docs, Sheets, Gmail) using your OAuth token — SunnyD never proxies that traffic through a separate server.
+There is **no SunnyD backend by default**: your notes stay in the browser. If you opt into the **optional sync server** (`VITE_API_BASE_URL`), note snapshots are stored on that host — still not on SunnyD infrastructure unless you use a SunnyD-hosted endpoint. **LLM providers** receive text only when you use AI features. If you enable **Google Workspace**, your browser also sends data **directly to Google's APIs** (Calendar, Drive, Docs, Sheets, Gmail) using your OAuth token — SunnyD never proxies that traffic through a separate server.
 
 ---
 
@@ -156,7 +196,15 @@ SunnyD_NoteTaker/
 ├── sunnyd.jsx          # Main app — UI, logic, styles, persistence, export
 ├── src/
 │   ├── main.jsx        # React mount point and error boundary
-│   └── google/         # Google OAuth (PKCE), Calendar/Drive/Docs/Sheets/Gmail helpers, job runner
+│   ├── sync/           # Client sync helpers when VITE_API_BASE_URL is set
+│   └── google/         # Google OAuth (PKCE), Calendar/Drive/Docs/Sheets/Gmail helpers
+├── server/             # Optional sync API (Express + SQLite/Postgres) — ADR-008 / ADR-009
+│   ├── index.js
+│   ├── config.js
+│   ├── crypto/       # password hashing, JWT
+│   ├── db/           # SQLite + optional PostgreSQL adapters
+│   ├── middleware/auth.js
+│   └── routes/       # auth.js, notes.js
 ├── public/
 │   └── sunnyd-logo.png
 ├── package.json
@@ -167,8 +215,6 @@ SunnyD_NoteTaker/
 ```
 
 Most UI and behaviour live in `sunnyd.jsx` (CSS injected via `<style>`). Optional Google Workspace logic is modularized under [`src/google/`](src/google/) for OAuth and REST calls.
-
----
 
 ## Configuration reference
 

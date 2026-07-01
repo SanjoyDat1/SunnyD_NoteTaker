@@ -16,7 +16,19 @@ Please open a [GitHub Issue](https://github.com/SanjoyDat1/SunnyD_NoteTaker/issu
 
 ## How user data is handled
 
-SunnyD Notes is a fully client-side application. No backend server processes or stores your data.
+SunnyD Notes is **browser-first by default**. No backend is required; nothing is sent to SunnyD infrastructure unless you opt into the optional sync server (see [ADR-008](docs/adrs/ADR-008-optional-sync-backend.md)).
+
+### Optional sync server
+
+If you set `VITE_API_BASE_URL` and run the sync API under `server/`:
+
+- **Notes** (title, content, active note id) are stored in **SQLite** (or PostgreSQL via `DATABASE_URL`) on the host you run.
+- **API keys**, **Google OAuth tokens**, and **LLM traffic** are still never stored or proxied by the sync server.
+- For multi-user or internet-facing instances, use **per-user JWT auth** ([ADR-009](docs/adrs/ADR-009-per-user-sync-auth.md)): set `SUNNYD_JWT_SECRET` (≥32 chars). Passwords are hashed with scrypt; each account only sees its own workspace. Note content is **not end-to-end encrypted** — the host operator can read stored notes.
+- The legacy v1 shared secret (`SUNNYD_API_SECRET` / `VITE_SUNNYD_API_SECRET`) only deters casual unauthenticated access — it is embedded in the frontend bundle at build time, so treat legacy remote sync as **single-user / trusted-network only**.
+- Use HTTPS in production (reverse proxy); the sync API speaks plain HTTP only. Behind a proxy, set `SUNNYD_TRUST_PROXY=1` so login rate limiting sees real client IPs (`X-Forwarded-For` is ignored otherwise, since it is client-spoofable).
+- Synced note HTML is sanitized client-side on hydration (script tags, event handlers, `javascript:` URLs stripped) before rendering, since a synced snapshot can be written by any device holding the account token.
+- The server binds to `127.0.0.1` by default. Set `SUNNYD_BIND=0.0.0.0` for LAN/WAN access — the server **refuses to start** without `SUNNYD_JWT_SECRET` (or the legacy `SUNNYD_API_SECRET`).
 
 ### API keys
 
@@ -54,7 +66,7 @@ If you enable **Google Workspace integration** and connect your Google account:
 ### What is NOT collected
 
 - No analytics, telemetry, or tracking of any kind.
-- No user accounts or registration.
+- No user accounts or registration by default (the optional sync server in JWT mode stores an email + scrypt password hash per account — nothing else).
 - No server-side logging of notes, queries, or API keys.
 
 ---
