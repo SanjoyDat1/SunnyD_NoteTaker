@@ -97,13 +97,18 @@ spacing:
   xxl: "24px"
 
 rounded:
-  sm: "4px"
-  md: "7px"
-  lg: "8px"
+  sm: "6px"
+  md: "10px"
+  lg: "14px"
+  xl: "18px"
 
-shadow:
-  sm: "0 2px 4px rgba(0,0,0,0.1)"
-  md: "0 3px 10px rgba(237,127,33,0.4)"
+elevation:
+  e1: "0 1px 2px rgba(50,35,15,0.05), 0 2px 8px rgba(50,35,15,0.04)"
+  e2: "0 2px 6px rgba(50,35,15,0.07), 0 10px 28px rgba(50,35,15,0.09)"
+  e3: "0 6px 18px rgba(50,35,15,0.11), 0 28px 64px rgba(50,35,15,0.18)"
+
+gradients:
+  cta: "linear-gradient(135deg, #DE741F, #C45A1A)"
 
 ---
 
@@ -141,6 +146,10 @@ Body text (13px) is generous and legible in long-form note content. Labels (11â€
 ## Spacing & Layout
 
 8px base unit creates a rhythm: 4px (tight), 8px (breathing room), 12px (section separation), 16px (major blocks). This grid keeps the interface calm and organized without visual noise.
+
+## Elevation
+
+Three levels, all warm-tinted (never pure black shadows): **e1** for resting cards in the annotation rail, **e2** for hover states and anchored popovers, **e3** for modals and floating players. A surface's shadow tells the user how "above the page" it is â€” resting content whispers, focused surfaces speak, modals command.
 
 ## Interaction
 

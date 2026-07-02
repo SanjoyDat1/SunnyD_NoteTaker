@@ -1539,6 +1539,22 @@ const CSS = `
   --sh:      rgba(50,35,15,.08);
   --green:   #1A6835;
   --red:     #B83030;
+  /* docs/design.md tokens — purple thinks, orange acts, green confirms */
+  --primary:      #5E38A0;
+  --primary-2:    #7a5cb8;
+  --primary-soft: rgba(94,56,160,.12);
+  --primary-tint: rgba(94,56,160,.05);
+  --accent:       #ed7f21;
+  --accent-2:     #C45A1A;
+  --accent-soft:  rgba(237,127,33,.12);
+  --cta:          linear-gradient(135deg,#DE741F,#C45A1A);
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --e1: 0 1px 2px rgba(50,35,15,.05), 0 2px 8px rgba(50,35,15,.04);
+  --e2: 0 2px 6px rgba(50,35,15,.07), 0 10px 28px rgba(50,35,15,.09);
+  --e3: 0 6px 18px rgba(50,35,15,.11), 0 28px 64px rgba(50,35,15,.18);
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;}
@@ -3162,11 +3178,6 @@ mark{background:rgba(234,179,8,0.3);color:inherit;border-radius:2px;padding:0 2p
 .lecture-q-retry-btn:hover{background:#faeeec;border-color:rgba(190,72,67,.6);}
 
 /* ── Design-system polish layer (docs/design.md) ─────────────────────────── */
-:root{
-  --primary:#5E38A0;
-  --primary-soft:rgba(94,56,160,.12);
-  --accent:#ed7f21;
-}
 /* Text selection matches the warm palette instead of browser default blue */
 ::selection{background:rgba(237,127,33,.28);color:var(--ink);}
 /* Keyboard accessibility: one consistent, visible focus ring everywhere */
@@ -3208,6 +3219,78 @@ button:disabled{opacity:.55;cursor:not-allowed;}
 .editor-toolbar-btn:hover{color:var(--ink);}
 /* Empty-editor placeholder reads as an invitation, not missing data */
 .note-editor .ProseMirror p.is-editor-empty:first-child::before{font-style:italic;}
+
+/* ═══ Design System v2 — full-surface application of docs/design.md ═══════
+   Semantic color roles: orange acts (create/save/send), purple thinks (AI),
+   green confirms (apply/success). Elevation and radius come from tokens so
+   every floating surface sits on the same visual scale. Selectors are
+   unchanged — this layer only re-skins what already exists. */
+
+/* — Brand & header chrome — */
+.logo-sq{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;border-radius:7px;box-shadow:0 2px 6px rgba(237,127,33,.35);}
+.logo-name{font-weight:700;letter-spacing:-.025em;}
+.logo-tag{color:var(--accent-2);opacity:.9;font-weight:600;}
+.hdr-row-sugg{background:linear-gradient(90deg,var(--primary-tint),rgba(246,243,239,.65) 45%);}
+.hdr-sugg-kicker{font-size:9.5px;color:var(--primary);opacity:.75;}
+.sugg-freq-btn.on{background:var(--primary);border-color:var(--primary);color:#fff;}
+.lecture-btn.on{background:linear-gradient(135deg,#6B3EB8,var(--primary));border-color:transparent;color:#fff;}
+.lecture-btn.on:hover{background:linear-gradient(135deg,#7a4cc9,#6B3EB8);}
+
+/* — Sidebar: from bare list to navigable panel — */
+.notes-sb{width:208px;padding:14px 10px 12px;background:linear-gradient(180deg,var(--paper) 0%,#F4EEE4 100%);}
+.new-btn{background:var(--cta);border-radius:var(--r-md);font-weight:700;font-size:12.5px;letter-spacing:.01em;box-shadow:0 2px 8px rgba(222,116,31,.28);}
+.new-btn:hover{opacity:1;box-shadow:0 4px 14px rgba(222,116,31,.38);transform:translateY(-1px);}
+.search-btn{background:var(--page);color:var(--ink2);border:1px solid var(--rule2);border-radius:var(--r-md);}
+.search-btn:hover{opacity:1;border-color:var(--ink3);color:var(--ink);}
+.note-row{padding:8px 10px;border-radius:var(--r-sm);gap:8px;}
+.note-row:hover{background:rgba(255,255,255,.85);}
+.note-row.on{background:var(--page);box-shadow:inset 3px 0 0 var(--accent),var(--e1);}
+.nr-pip{width:4px;height:4px;}
+.note-row.on .nr-pip{background:var(--accent-2);}
+.nr-lbl{font-size:12.5px;}
+.sb-ttl{font-size:9px;opacity:.65;}
+.sb-h{font-size:11px;}
+.sb-d{font-size:10px;}
+.sb-autosave{font-size:10px;}
+
+/* — Editor canvas: bigger title, readable line measure — */
+.title-inp{font-size:30px;letter-spacing:-.03em;}
+.title-inp,.meta-row,.note-meta-chips,.divider,.note-editor-wrap,.ghost-hint{max-width:78ch;}
+.doc-col{background-image:repeating-linear-gradient(transparent,transparent 31px,rgba(170,155,130,.09) 31px,rgba(170,155,130,.09) 32px);}
+.note-editor h1{font-weight:700;letter-spacing:-.02em;}
+.note-editor h2{font-weight:700;letter-spacing:-.015em;}
+.note-editor a{color:var(--accent-2);text-underline-offset:2px;}
+
+/* — Right rail: floating cards with a shared elevation scale — */
+.ann-card{border-radius:var(--r-md);box-shadow:var(--e1);}
+.ann-card-wrap:hover .ann-card{box-shadow:var(--e2);transform:translateY(-2px);}
+.ann-card.expanded{box-shadow:var(--e2);}
+.ann-empty{border:1.5px dashed rgba(190,175,152,.5);border-radius:var(--r-md);background:rgba(255,255,255,.5);}
+.docked-card{border-radius:var(--r-lg);box-shadow:var(--e3);}
+
+/* — Floating surfaces: one elevation + radius language — */
+.note-setup-modal,.ws-modal{border-radius:var(--r-xl);box-shadow:var(--e3);}
+.sel-result-card,.lecture-q-card,.podcast-float-inner,.hdr-ws-act-panel{border-radius:var(--r-lg);box-shadow:var(--e3);}
+.export-menu,.pop,.workspace-pop{box-shadow:var(--e2);}
+
+/* — Primary CTAs run on the accent (design.md: orange drives action) — */
+.key-btn{background:var(--cta);box-shadow:0 4px 18px rgba(222,116,31,.32);}
+.key-btn:hover:not(:disabled){opacity:1;box-shadow:0 8px 26px rgba(222,116,31,.42);}
+.note-setup-go{background:var(--cta);box-shadow:0 3px 12px rgba(222,116,31,.28);}
+
+/* — Small-type legibility floor (nothing below 9px) — */
+.ann-tag{font-size:9px;}
+.ann-card-inner .ann-tag-label{font-size:9.5px;}
+.ws-hint-kind{font-size:9px;}
+.hdr-ws-act-kind{font-size:9.5px;}
+.lecture-panel-lbl{font-size:9.5px;}
+.meta-row{font-size:10.5px;}
+
+/* — Consistency details — */
+.sel-result-body code{background:var(--primary-soft);color:#4c2d74;}
+input[type=range]{accent-color:var(--accent-2);}
+.hdr-pill:hover{border-color:var(--rule2);color:var(--ink2);}
+
 /* Respect users who turn animations off */
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;}
